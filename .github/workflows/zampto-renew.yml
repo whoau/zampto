@@ -1,0 +1,38 @@
+name: Zampto Auto Renew
+
+on:
+  schedule:
+    - cron: "1 22 * * *"    # 每天北京时间 06:01
+  workflow_dispatch:
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb x11vnc fluxbox
+
+      - name: Install Python dependencies
+        run: |
+          pip install seleniumbase requests
+
+      - name: Run renew script
+        env:
+          ZAMTO_EMAIL: ${{ secrets.ZAMTO_EMAIL }}
+          ZAMTO_PASSWORD: ${{ secrets.ZAMTO_PASSWORD }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          IS_PROXY: ${{ secrets.IS_PROXY }}
+          PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
+        run: |
+          python zampto_renew.py
