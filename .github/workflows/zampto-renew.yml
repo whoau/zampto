@@ -2,37 +2,62 @@ name: Zampto Auto Renew
 
 on:
   schedule:
-    - cron: "1 22 * * *"    # 每天北京时间 06:01
-  workflow_dispatch:
+    - cron: '0 2 */3 * *'   # 每3天 UTC 2:00 运行（北京时间 10:00），可按需调整
+  workflow_dispatch:        # 允许手动触发
 
 jobs:
-  renew:
+  Renew-Zampto:
     runs-on: ubuntu-latest
+    permissions:
+      actions: write  
+      contents: read
+    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+    - uses: actions/checkout@v6
+    - name: ⚙ 设置 Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.10"
+    - name: 🛠️ 安装系统依赖和python依赖
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y xvfb x11-utils xdotool scrot fonts-noto-cjk
+        pip install seleniumbase requests
+        seleniumbase install chromedriver
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb x11vnc fluxbox
+    - name: ⚙ 设置代理 (sing-box)   # 如果需要代理，通过 secrets.NODE_LINK 配置
+      continue-on-error: true
+      env:
+        NODE_LINK: ${{ secrets.NODE_LINK }}
+      run: |
+        bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
 
-      - name: Install Python dependencies
-        run: |
-          pip install seleniumbase requests
-
-      - name: Run renew script
-        env:
-          ZAMTO_EMAIL: ${{ secrets.ZAMTO_EMAIL }}
-          ZAMTO_PASSWORD: ${{ secrets.ZAMTO_PASSWORD }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          IS_PROXY: ${{ secrets.IS_PROXY }}
-          PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
-        run: |
-          python zampto_renew.py
+    - name: 🚀 运行续期脚本
+      env:
+        ZAMTO_EMAIL: ${{ secrets.ZAMTO_EMAIL }}
+        ZAMTO_PASSWORD: ${{ secrets.ZAMTO_PASSWORD }}
+        TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+        TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        # 如果使用了上面的 setup_proxy.sh 设置了系统代理，可以将 IS_PROXY 设为 false
+        # 如果希望 SeleniumBase 也使用代理，可将 IS_PROXY 设为 true 并填写 PROXY_SERVER
+        IS_PROXY: ${{ secrets.IS_PROXY }}          # 可选，默认 false
+        PROXY_SERVER: ${{ secrets.PROXY_SERVER }}  # 可选
+      run: |
+        xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+          python3 zampto_renew.py
+        
+    - name: 🧹 清理旧的工作流运行记录
+      if: always()
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        runs=$(gh run list --workflow="${{ github.workflow }}" --limit=100 --databaseId --jq '.[].databaseId')
+        count=0
+        for run_id in $runs; do
+          count=$((count + 1))
+          if [ $count -gt 1 ]; then
+            echo "删除运行记录: $run_id"
+            gh run delete $run_id || true
+          fi
+        done
