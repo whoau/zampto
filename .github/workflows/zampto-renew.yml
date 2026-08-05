@@ -2,16 +2,16 @@ name: Zampto Auto Renew
 
 on:
   schedule:
-    - cron: '0 2 */3 * *'   # 每3天 UTC 2:00 运行（北京时间 10:00），可按需调整
-  workflow_dispatch:        # 允许手动触发
+    - cron: '0 2 */3 * *'
+  workflow_dispatch:
 
 jobs:
   Renew-Zampto:
     runs-on: ubuntu-latest
     permissions:
-      actions: write  
+      actions: write
       contents: read
-    
+
     steps:
     - uses: actions/checkout@v6
     - name: ⚙ 设置 Python
@@ -26,7 +26,7 @@ jobs:
         pip install seleniumbase requests
         seleniumbase install chromedriver
 
-    - name: ⚙ 设置代理 (sing-box)   # 如果需要代理，通过 secrets.NODE_LINK 配置
+    - name: ⚙ 设置代理 (sing-box)
       continue-on-error: true
       env:
         NODE_LINK: ${{ secrets.NODE_LINK }}
@@ -39,14 +39,22 @@ jobs:
         ZAMTO_PASSWORD: ${{ secrets.ZAMTO_PASSWORD }}
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        # 如果使用了上面的 setup_proxy.sh 设置了系统代理，可以将 IS_PROXY 设为 false
-        # 如果希望 SeleniumBase 也使用代理，可将 IS_PROXY 设为 true 并填写 PROXY_SERVER
-        IS_PROXY: ${{ secrets.IS_PROXY }}          # 可选，默认 false
-        PROXY_SERVER: ${{ secrets.PROXY_SERVER }}  # 可选
+        # 可选：如果 setup_proxy.sh 未设置 http_proxy，可手动指定 PROXY_SERVER
+        # PROXY_SERVER: http://127.0.0.1:1080
       run: |
         xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
           python3 zampto_renew.py
-        
+
+    - name: 📸 上传截图（用于调试）
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: zampto-debug-screenshots
+        path: |
+          *.png
+          *.html
+        if-no-files-found: ignore
+
     - name: 🧹 清理旧的工作流运行记录
       if: always()
       env:
