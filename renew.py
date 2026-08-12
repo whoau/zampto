@@ -13,7 +13,7 @@ PASSWORD     = os.environ.get("ZAM_PTO_PASSWORD") or ""   # 账号密码
 TG_CHAT_ID   = os.environ.get("TG_CHAT_ID") or ""         # tg通知 chat id(可选)
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""       # tg通知bot token(可选)
 
-BASE_URL = "https://dash.zampto.net"  # 网站链接（改了）
+BASE_URL = "https://zampto.net"  # 网站链接（改了）
 
 # ===== Telegram 推送（改文案） =====
 def send_tg_message(status_icon, status_text, time_left=""):
