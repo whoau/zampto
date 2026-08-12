@@ -2,70 +2,57 @@ name: Zampto Auto Renew
 
 on:
   schedule:
-    - cron: '0 2 */3 * *'
-  workflow_dispatch:
+    # 每天 UTC 0:00（北京时间 8:00）运行，可根据需要调整 cron 表达式
+    - cron: '0 0 * * *'
+  workflow_dispatch:  # 允许手动触发
 
 jobs:
-  Renew-Zampto:
+  renew:
     runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      contents: read
 
     steps:
-    - uses: actions/checkout@v6
-    - name: ⚙ 设置 Python
-      uses: actions/setup-python@v6
-      with:
-        python-version: '3.12'
+      # 1. 检出代码仓库
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: 🛠️ 安装系统依赖和python依赖
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y xvfb x11-utils xdotool scrot fonts-noto-cjk
-        pip install seleniumbase requests
-        seleniumbase install chromedriver
+      # 2. 设置 Python 环境
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-    - name: ⚙ 设置代理 (sing-box)
-      continue-on-error: true
-      env:
-        NODE_LINK: ${{ secrets.NODE_LINK }}
-      run: |
-        bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
+      # 3. 安装系统依赖（Chrome 浏览器、虚拟显示服务）
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            xvfb \
+            xdotool \
+            wget \
+            unzip \
+            chromium-browser \
+            chromium-chromedriver
+          # 设置环境变量，让 Selenium 能找到 Chrome
+          echo "CHROME_PATH=/usr/bin/chromium-browser" >> $GITHUB_ENV
+          echo "CHROMEDRIVER_PATH=/usr/bin/chromedriver" >> $GITHUB_ENV
 
-    - name: 🚀 运行续期脚本
-      env:
-        ZAMTO_EMAIL: ${{ secrets.ZAMTO_EMAIL }}
-        ZAMTO_PASSWORD: ${{ secrets.ZAMTO_PASSWORD }}
-        TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-        TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        # 可选：如果 setup_proxy.sh 未设置 http_proxy，可手动指定 PROXY_SERVER
-        # PROXY_SERVER: http://127.0.0.1:1080
-      run: |
-        xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
-          python3 zampto_renew.py
+      # 4. 安装 Python 依赖
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-    - name: 📸 上传截图（用于调试）
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: zampto-debug-screenshots
-        path: |
-          *.png
-          *.html
-        if-no-files-found: ignore
-
-    - name: 🧹 清理旧的工作流运行记录
-      if: always()
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        runs=$(gh run list --workflow="${{ github.workflow }}" --limit=100 --databaseId --jq '.[].databaseId')
-        count=0
-        for run_id in $runs; do
-          count=$((count + 1))
-          if [ $count -gt 1 ]; then
-            echo "删除运行记录: $run_id"
-            gh run delete $run_id || true
-          fi
-        done
+      # 5. 运行续期脚本（带代理配置）
+      - name: Run renew script
+        env:
+          # 从 GitHub Secrets 注入敏感信息
+          ZAM_PTO_EMAIL: ${{ secrets.ZAM_PTO_EMAIL }}
+          ZAM_PTO_PASSWORD: ${{ secrets.ZAM_PTO_PASSWORD }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          # 代理节点配置（必填，因为 zampto 需要代理访问）
+          IS_PROXY: ${{ secrets.IS_PROXY }}
+          PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
+        run: |
+          # 使用 xvfb-run 创建虚拟显示，以支持无头浏览器运行
+          xvfb-run python main.py
