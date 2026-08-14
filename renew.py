@@ -61,7 +61,7 @@ def send_tg_message(status_icon: str, status_text: str, detail: str = ""):
         print(f"⚠️ Telegram 通知发送异常: {e}")
 
 # ============================================================
-# Cloudflare Turnstile 绕过（移植自 katabump）
+# Cloudflare Turnstile 绕过
 # ============================================================
 
 _EXPAND_JS = """
@@ -294,161 +294,160 @@ def login(sb) -> bool:
     return False
 
 # ============================================================
-# 续期流程
+# 续期单个服务器（传入 sb 和当前页面的 View Server 元素）
 # ============================================================
 
-def goto_server_detail(sb) -> bool:
-    print("\n🖥️ 正在查找服务器详情入口……")
+def renew_one_server(sb, server_link_element, index) -> dict:
+    """
+    点击 server_link_element 进入详情页，执行续期，返回结果字典
+    """
+    result = {
+        "index": index,
+        "server_name": "",
+        "status": "unknown",
+        "detail": ""
+    }
+
+    try:
+        # 获取服务器名称（用于日志）
+        name = (server_link_element.text or "").strip() or f"Server-{index}"
+        result["server_name"] = name
+        print(f"\n🔄 正在处理第 {index+1} 个服务器: {name}")
+
+        # 点击 View Server（使用 JS）
+        sb.execute_script("arguments[0].scrollIntoView({block:'center'});", server_link_element)
+        time.sleep(0.5)
+        sb.execute_script("arguments[0].click();", server_link_element)
+        time.sleep(5)  # 等待详情页加载
+
+        # 检查是否进入详情页（URL 包含 server）
+        current_url = sb.get_current_url()
+        if "server" not in current_url.lower():
+            result["status"] = "failed"
+            result["detail"] = "未进入详情页"
+            print(f"❌ 点击 View Server 后未进入详情页")
+            return result
+
+        print(f"📄 进入详情页: {current_url}")
+
+        # 在详情页查找 "Renew Server" 按钮
+        elements = sb.find_elements("button, a")
+        renew_btn = None
+        for elem in elements:
+            if (elem.text or "").strip().lower() == "renew server":
+                renew_btn = elem
+                break
+
+        if not renew_btn:
+            result["status"] = "failed"
+            result["detail"] = "未找到 Renew Server 按钮"
+            print("❌ 未找到 Renew Server 按钮")
+            sb.save_screenshot(f"renew_button_fail_{index}.png")
+            # 返回列表页
+            sb.back()
+            time.sleep(3)
+            return result
+
+        # 点击 Renew Server
+        sb.execute_script("arguments[0].scrollIntoView({block:'center'});", renew_btn)
+        time.sleep(0.5)
+        sb.execute_script("arguments[0].click();", renew_btn)
+        print("✅ 已点击 Renew Server 按钮")
+        time.sleep(5)
+
+        # 检查续期结果
+        alert_text = read_alert(sb)
+        if alert_text:
+            print(f"📩 页面提示: {alert_text}")
+            result["detail"] = alert_text
+            lowered = alert_text.lower()
+            if any(kw in lowered for kw in ("renewed", "success", "extended", "completed")):
+                result["status"] = "success"
+            elif any(kw in lowered for kw in ("can't renew", "unable", "already renewed")):
+                result["status"] = "skipped"
+            else:
+                result["status"] = "unknown"
+        else:
+            # 没有 alert，可能续期已直接生效或未触发提示，暂定为成功
+            print("ℹ️ 未检测到明确提示，假定续期请求已发送")
+            result["status"] = "success"
+            result["detail"] = "无提示，假定成功"
+
+        # 返回服务器列表页
+        sb.back()
+        time.sleep(3)
+        return result
+
+    except Exception as e:
+        print(f"⚠️ 处理第 {index+1} 个服务器时发生异常: {e}")
+        result["status"] = "error"
+        result["detail"] = str(e)
+        # 尝试返回列表
+        try:
+            sb.back()
+            time.sleep(3)
+        except:
+            pass
+        return result
+
+# ============================================================
+# 主续期流程：遍历所有 View Server
+# ============================================================
+
+def renew_all_servers(sb) -> list:
+    print("\n" + "#" * 25)
+    print("   开始 ZamPTO 自动续期流程（全部服务器）")
+    print("#" * 25)
+
+    # 等待列表页加载
     time.sleep(4)
 
-    alert_text = read_alert(sb)
-    if alert_text and "can't renew" in alert_text.lower():
-        print(f"ℹ️ 页面提示: {alert_text}")
-        send_tg_message("ℹ️", "未到续期时间", alert_text)
-        return False
-
-    # 精确匹配 "View Server" 链接
-    try:
-        view_link = sb.find_element("//a[contains(text(),'View Server')]", timeout=5)
-        print(f"✅ 找到 View Server 链接: {view_link.text}")
-        sb.scroll_to(view_link)
-        time.sleep(0.5)
-        view_link.click()
-        time.sleep(5)
-        print(f"📄 点击后当前页面: {sb.get_current_url()}")
-        if "server" in sb.get_current_url().lower():
-            return True
-        else:
-            print("⚠️ 点击后未进入服务器详情页，尝试其他方法...")
-    except Exception as e:
-        print(f"⚠️ 通过 XPath 查找 View Server 失败: {e}")
-
-    # 备用：遍历所有 a 标签
+    # 收集所有 "View Server" 链接
     try:
         all_links = sb.find_elements("a")
-        print(f"🔎 页面共有 {len(all_links)} 个链接")
+        view_links = []
         for a in all_links:
-            text = (a.text or "").strip()
-            if text.lower() == "view server":
-                print(f"✅ 通过文本匹配找到: {text}")
-                sb.scroll_to(a)
-                a.click()
-                time.sleep(5)
-                if "server" in sb.get_current_url().lower():
-                    return True
+            if (a.text or "").strip().lower() == "view server":
+                view_links.append(a)
+        print(f"🔎 找到 {len(view_links)} 个 'View Server' 链接")
     except Exception as e:
-        print(f"⚠️ 遍历链接失败: {e}")
+        print(f"❌ 收集链接失败: {e}")
+        return []
 
-    print("❌ 未找到 'View Server' 入口")
-    sb.save_screenshot("servers_page_fail.png")
-    return False
+    if not view_links:
+        print("❌ 未找到任何 'View Server' 链接")
+        return []
 
-def open_renew_dialog(sb) -> bool:
-    print("\n🔄 查找 'Renew Server' 按钮……")
-    time.sleep(3)
-    print(f"当前 URL: {sb.get_current_url()}")
-    print(f"页面标题: {sb.get_title() or ''}")
+    # 逐个续期
+    results = []
+    for idx, link in enumerate(view_links):
+        result = renew_one_server(sb, link, idx)
+        results.append(result)
+        # 每处理完一个，打印当前结果
+        print(f"📊 第 {idx+1} 个服务器续期结果: {result['status']} - {result['detail']}")
 
-    renew_btn = None
+    # 汇总通知
+    total = len(results)
+    success = sum(1 for r in results if r['status'] == 'success')
+    skipped = sum(1 for r in results if r['status'] == 'skipped')
+    failed = sum(1 for r in results if r['status'] in ('failed', 'error'))
 
-    # 尝试多种 XPath 定位（同时支持 button 和 a）
-    selectors = [
-        "//button[contains(text(),'Renew Server')]",
-        "//a[contains(text(),'Renew Server')]",
-        "//*[contains(text(),'Renew Server') and (self::button or self::a)]",
-    ]
-    for xpath in selectors:
-        try:
-            renew_btn = sb.find_element(xpath, timeout=3)
-            if renew_btn:
-                print(f"✅ 通过 XPath 找到: {xpath}")
-                break
-        except Exception:
-            continue
+    summary = (
+        f"续期完成：共 {total} 个服务器\n"
+        f"✅ 成功: {success}\n"
+        f"⏭️ 跳过(已续期/未到期): {skipped}\n"
+        f"❌ 失败: {failed}"
+    )
+    detail_lines = []
+    for r in results:
+        detail_lines.append(f"  #{r['index']+1} {r['server_name']}: {r['status']} - {r['detail']}")
+    detail = "\n".join(detail_lines)
 
-    if renew_btn is None:
-        print("⚠️ XPath 未命中，遍历所有可点击元素...")
-        try:
-            elements = sb.find_elements("button, a, input[type='button']")
-            for elem in elements:
-                if "renew server" in (elem.text or "").lower():
-                    renew_btn = elem
-                    print("✅ 通过遍历找到 'Renew Server'")
-                    break
-        except Exception as e:
-            print(f"⚠️ 遍历元素失败: {e}")
+    send_tg_message("📋", summary, detail)
+    print(summary)
+    print("详细结果:\n" + detail)
 
-    if renew_btn is None:
-        print("❌ 未找到 'Renew Server' 按钮")
-        try:
-            all_elements = sb.find_elements("button, a")
-            print("页面所有 button/a 文本:")
-            for e in all_elements[:20]:
-                print(f"  - {e.text}")
-        except Exception:
-            pass
-        sb.save_screenshot("renew_button_fail.png")
-        return False
-
-    try:
-        sb.scroll_to(renew_btn)
-        time.sleep(0.5)
-        renew_btn.click()
-        print("✅ 已点击 'Renew Server' 按钮")
-        time.sleep(3)
-        return True
-    except Exception as e:
-        print(f"⚠️ 点击失败: {e}")
-        try:
-            sb.execute_script("arguments[0].click();", renew_btn)
-            print("✅ 使用 JS 点击成功")
-            time.sleep(3)
-            return True
-        except Exception as e2:
-            print(f"❌ JS 点击也失败: {e2}")
-            return False
-
-def submit_renew(sb) -> bool:
-    print("⏳ 等待续期结果反馈（5秒）...")
-    time.sleep(5)
-
-    alert_text = read_alert(sb)
-    if alert_text:
-        print(f"📩 页面提示: {alert_text}")
-        # 无论提示什么，都继续让 check_renew_result 判断
-        return True
-    else:
-        print("ℹ️ 未检测到明确提示，默认续期请求已发送")
-        return True
-
-def check_renew_result(sb):
-    print("\n📋 检查续期结果……")
-    time.sleep(2)
-    alert_text = read_alert(sb)
-    if not alert_text:
-        print("ℹ️ 未检测到明确的续期结果")
-        send_tg_message("ℹ️", "续期操作已执行", "页面没有明确提示")
-        return
-    print(f"📩 页面提示: {alert_text}")
-    lowered = alert_text.lower()
-    if any(kw in lowered for kw in ("can't renew", "unable", "already renewed")):
-        send_tg_message("⏳", "未到续期时间或已续期", alert_text)
-    elif any(kw in lowered for kw in ("renewed", "success", "extended", "completed")):
-        send_tg_message("✅", "续期成功", alert_text)
-    else:
-        send_tg_message("ℹ️", "续期操作已执行", alert_text)
-
-def renew_server(sb):
-    print("\n" + "#" * 25)
-    print("  开始 ZamPTO 自动续期流程")
-    print("#" * 25)
-    if not goto_server_detail(sb):
-        return
-    if not open_renew_dialog(sb):
-        return
-    if not submit_renew(sb):
-        return
-    check_renew_result(sb)
+    return results
 
 # ============================================================
 # 主程序
@@ -488,7 +487,9 @@ def main():
 
             if login(sb):
                 print("\n🎉 登录流程成功")
-                renew_server(sb)
+                # 登录后，当前页面应该是服务器列表页 (dashboard)
+                # 直接调用续期全部
+                renew_all_servers(sb)
             else:
                 print("\n❌ 登录失败，终止续期操作。")
                 send_tg_message("❌", "登录失败")
