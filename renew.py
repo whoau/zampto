@@ -327,7 +327,7 @@ def get_server_ids(sb) -> list:
     return []
 
 # ============================================================
-# 续期单个服务器（利用您提供的HTML结构精确定位）
+# 续期单个服务器（修复版）
 # ============================================================
 
 def renew_one_server_by_id(sb, server_id, index) -> dict:
@@ -405,51 +405,110 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
             result["detail"] = "未找到 Renew Server 按钮"
             return result
 
-        # ---------- 使用 JavaScript 获取坐标，再通过 xdotool 物理点击 ----------
+        # ---------- 使用多种点击方式（备选方案） ----------
+        click_success = False
+        
+        # 方式1: Selenium 原生点击
+        print("🖱️ 尝试方式1: Selenium 原生点击")
         try:
-            # 激活窗口
-            _activate_window()
-
-            # 获取元素在视口中的坐标
-            coords = sb.execute_script("""
-                var el = arguments[0];
-                var rect = el.getBoundingClientRect();
-                return {
-                    x: Math.round(rect.left + rect.width / 2),
-                    y: Math.round(rect.top + rect.height / 2)
-                };
-            """, renew_btn)
-
-            if not coords:
-                raise Exception("JavaScript 返回坐标为空")
-
-            # 获取窗口偏移
-            win_info = sb.execute_script("""
-                return {
-                    sx: window.screenX || 0,
-                    sy: window.screenY || 0,
-                    oh: window.outerHeight || 0,
-                    ih: window.innerHeight || 0
-                };
-            """)
-
-            # 计算标题栏高度
-            bar = win_info.get('oh', 0) - win_info.get('ih', 0)
-            if bar < 0:
-                bar = 0
-
-            screen_x = coords['x'] + win_info.get('sx', 0)
-            screen_y = coords['y'] + win_info.get('sy', 0) + bar
-
-            print(f"🖱️ 准备点击坐标: ({screen_x}, {screen_y})")
-            _xdotool_click(screen_x, screen_y)
-            print("✅ 已通过 xdotool 物理点击 Renew Server 按钮")
+            # 先滚动到元素可见
+            sb.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", renew_btn)
+            time.sleep(1)
+            renew_btn.click()
+            print("✅ 原生点击成功")
+            click_success = True
             time.sleep(5)
+        except Exception as e1:
+            print(f"⚠️ 原生点击失败: {e1}")
+            
+            # 方式2: JavaScript 点击
+            print("🖱️ 尝试方式2: JavaScript 点击")
+            try:
+                sb.execute_script("arguments[0].click();", renew_btn)
+                print("✅ JavaScript 点击成功")
+                click_success = True
+                time.sleep(5)
+            except Exception as e2:
+                print(f"⚠️ JavaScript 点击失败: {e2}")
+                
+                # 方式3: SeleniumBase 点击
+                print("🖱️ 尝试方式3: SeleniumBase 点击")
+                try:
+                    sb.click(renew_btn)
+                    print("✅ SeleniumBase 点击成功")
+                    click_success = True
+                    time.sleep(5)
+                except Exception as e3:
+                    print(f"⚠️ SeleniumBase 点击失败: {e3}")
+                    
+                    # 方式4: ActionChains 点击
+                    print("🖱️ 尝试方式4: ActionChains 点击")
+                    try:
+                        from selenium.webdriver.common.action_chains import ActionChains
+                        ActionChains(sb.driver).move_to_element(renew_btn).click().perform()
+                        print("✅ ActionChains 点击成功")
+                        click_success = True
+                        time.sleep(5)
+                    except Exception as e4:
+                        print(f"⚠️ ActionChains 点击失败: {e4}")
+                        
+                        # 方式5: xdotool 物理点击（修复版）
+                        print("🖱️ 尝试方式5: xdotool 物理点击")
+                        try:
+                            # 激活窗口
+                            _activate_window()
+                            
+                            # 获取元素坐标（修复后的代码）
+                            coords = sb.execute_script("""
+                                (function() {
+                                    var el = arguments[0];
+                                    var rect = el.getBoundingClientRect();
+                                    return {
+                                        x: Math.round(rect.left + rect.width / 2),
+                                        y: Math.round(rect.top + rect.height / 2)
+                                    };
+                                })();
+                            """, renew_btn)
+                            
+                            if not coords or 'x' not in coords or 'y' not in coords:
+                                raise Exception("JavaScript 返回坐标为空或无效")
+                            
+                            # 获取窗口偏移（修复后的代码）
+                            win_info = sb.execute_script("""
+                                (function() {
+                                    return {
+                                        sx: window.screenX || 0,
+                                        sy: window.screenY || 0,
+                                        oh: window.outerHeight || 0,
+                                        ih: window.innerHeight || 0
+                                    };
+                                })();
+                            """)
+                            
+                            # 计算标题栏高度
+                            bar = win_info.get('oh', 0) - win_info.get('ih', 0)
+                            if bar < 0 or bar > 200:  # 异常值检测
+                                bar = 80  # 使用默认值
+                            
+                            screen_x = coords['x'] + win_info.get('sx', 0)
+                            screen_y = coords['y'] + win_info.get('sy', 0) + bar
+                            
+                            print(f"   元素坐标: x={coords['x']}, y={coords['y']}")
+                            print(f"   窗口偏移: sx={win_info.get('sx', 0)}, sy={win_info.get('sy', 0)}, 标题栏={bar}")
+                            print(f"   准备点击: ({screen_x}, {screen_y})")
+                            
+                            _xdotool_click(screen_x, screen_y)
+                            print("✅ xdotool 物理点击成功")
+                            click_success = True
+                            time.sleep(5)
+                        except Exception as e5:
+                            print(f"⚠️ xdotool 点击失败: {e5}")
 
-        except Exception as e:
+        if not click_success:
             result["status"] = "error"
-            result["detail"] = f"物理点击失败: {e}"
+            result["detail"] = "所有点击方式均失败"
             print(f"❌ {result['detail']}")
+            sb.save_screenshot(f"click_all_failed_{server_id}.png")
             return result
 
         # ---------- 检查续期结果 ----------
@@ -486,6 +545,7 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
         print(f"⚠️ 处理服务器 ID={server_id} 时发生异常: {e}")
         result["status"] = "error"
         result["detail"] = str(e)
+        sb.save_screenshot(f"exception_{server_id}.png")
         return result
 
 # ============================================================
