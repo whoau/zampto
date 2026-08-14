@@ -28,9 +28,9 @@ PROXY_SERVER = os.environ.get(
 
 BASE_URL = "https://dash.zampto.net"
 
-# 已从你的 DevTools 截图确认
+# 从 DevTools 截图确认的选择器
 EMAIL_SELECTOR = "#email"
-PASSWORD_SELECTOR = "#password"
+PASSWORD_SELECTOR = "#password"          # 若实际为 name="password"，可改为 input[name="password"]
 
 
 # ============================================================
@@ -111,71 +111,6 @@ def send_tg_message(
         print(
             f"⚠️ Telegram 通知发送异常: {exc}"
         )
-
-
-# ============================================================
-# JS 设置输入框
-# ============================================================
-
-def js_fill_input(
-    sb,
-    selector: str,
-    text: str
-) -> bool:
-    """
-    安全设置输入框值，并触发 input/change 事件。
-    """
-
-    try:
-        result = sb.execute_script(
-            """
-            const selector = arguments[0];
-            const value = arguments[1];
-
-            const el = document.querySelector(selector);
-
-            if (!el) {
-                return false;
-            }
-
-            const descriptor =
-                Object.getOwnPropertyDescriptor(
-                    window.HTMLInputElement.prototype,
-                    "value"
-                );
-
-            if (descriptor && descriptor.set) {
-                descriptor.set.call(el, value);
-            } else {
-                el.value = value;
-            }
-
-            el.dispatchEvent(
-                new Event("input", {
-                    bubbles: true
-                })
-            );
-
-            el.dispatchEvent(
-                new Event("change", {
-                    bubbles: true
-                })
-            );
-
-            return true;
-            """,
-            selector,
-            text,
-        )
-
-        return bool(result)
-
-    except Exception as exc:
-        print(
-            f"⚠️ 设置输入框失败 "
-            f"{selector}: {exc}"
-        )
-        return False
 
 
 # ============================================================
@@ -466,7 +401,7 @@ def login(sb) -> bool:
         pass
 
     # --------------------------------------------------------
-    # 填写 Email
+    # 填写 Email（改用 SeleniumBase 原生方法）
     # --------------------------------------------------------
 
     print(
@@ -474,24 +409,16 @@ def login(sb) -> bool:
         f"({EMAIL_SELECTOR})……"
     )
 
-    if not js_fill_input(
-        sb,
-        EMAIL_SELECTOR,
-        EMAIL
-    ):
-
-        print(
-            "❌ 邮箱填写失败"
-        )
-
-        sb.save_screenshot(
-            "email_input_fail.png"
-        )
-
+    try:
+        sb.update_text(EMAIL_SELECTOR, EMAIL)
+        print("✅ 邮箱填写成功")
+    except Exception as exc:
+        print(f"❌ 邮箱填写失败: {exc}")
+        sb.save_screenshot("email_input_fail.png")
         return False
 
     # --------------------------------------------------------
-    # 填写 Password
+    # 填写 Password（改用 SeleniumBase 原生方法）
     # --------------------------------------------------------
 
     print(
@@ -499,20 +426,12 @@ def login(sb) -> bool:
         f"({PASSWORD_SELECTOR})……"
     )
 
-    if not js_fill_input(
-        sb,
-        PASSWORD_SELECTOR,
-        PASSWORD
-    ):
-
-        print(
-            "❌ 密码填写失败"
-        )
-
-        sb.save_screenshot(
-            "password_input_fail.png"
-        )
-
+    try:
+        sb.update_text(PASSWORD_SELECTOR, PASSWORD)
+        print("✅ 密码填写成功")
+    except Exception as exc:
+        print(f"❌ 密码填写失败: {exc}")
+        sb.save_screenshot("password_input_fail.png")
         return False
 
     time.sleep(1)
