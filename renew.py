@@ -135,7 +135,6 @@ def handle_turnstile(sb) -> bool:
     print("🔍 处理 Cloudflare Turnstile 验证...")
     time.sleep(2)
 
-    # 使用无参 JS，安全
     if sb.execute_script(_SOLVED_JS):
         print("✅ 已静默通过")
         return True
@@ -185,7 +184,7 @@ def read_alert(sb) -> str:
     return ""
 
 # ============================================================
-# 登录（改用 sb.update_text，移除所有带参 JS）
+# 登录（使用原生方法）
 # ============================================================
 
 def login(sb) -> bool:
@@ -226,7 +225,7 @@ def login(sb) -> bool:
         pass
 
     print(f"📧 填写邮箱 ({EMAIL_SELECTOR})……")
-    sb.update_text(EMAIL_SELECTOR, EMAIL)   # 原生方法，稳定
+    sb.update_text(EMAIL_SELECTOR, EMAIL)
     print(f"🔑 填写密码 ({PASSWORD_SELECTOR})……")
     sb.update_text(PASSWORD_SELECTOR, PASSWORD)
     time.sleep(1)
@@ -277,33 +276,29 @@ def login(sb) -> bool:
     return False
 
 # ============================================================
-# 获取服务器 ID 列表（纯文本提取，无 JS）
+# 获取服务器 ID 列表（从列表页提取）
 # ============================================================
 
 def get_server_ids(sb) -> list:
-    """
-    在服务器列表页（https://dash.zampto.net/）提取所有服务器 ID
-    通过查找包含 "ID: 数字" 的文本元素
-    """
     print("🔍 正在提取服务器 ID 列表...")
-    time.sleep(5)  # 等待页面渲染
+    time.sleep(5)
 
     server_ids = []
 
+    # 方法1：正则从页面源码提取
     try:
-        # 方法1：通过文本 "ID: 数字" 匹配
         page_text = sb.get_page_source()
         pattern = r'ID:\s*(\d+)'
         matches = re.findall(pattern, page_text)
         if matches:
-            server_ids = list(set(matches))  # 去重
+            server_ids = list(set(matches))
             print(f"✅ 通过正则找到 {len(server_ids)} 个服务器 ID: {server_ids}")
             return server_ids
     except Exception as e:
-        print(f"⚠️ 正则提取 ID 失败: {e}")
+        print(f"⚠️ 正则提取失败: {e}")
 
+    # 方法2：遍历元素查找 "ID:"
     try:
-        # 方法2：遍历所有元素，查找包含 "ID:" 的文本
         all_elements = sb.find_elements("*")
         for elem in all_elements:
             text = (elem.text or "").strip()
@@ -318,7 +313,7 @@ def get_server_ids(sb) -> list:
             print(f"✅ 通过遍历找到 {len(server_ids)} 个服务器 ID: {server_ids}")
             return server_ids
     except Exception as e:
-        print(f"⚠️ 遍历提取 ID 失败: {e}")
+        print(f"⚠️ 遍历提取失败: {e}")
 
     # 方法3：从当前 URL 提取
     current_url = sb.get_current_url()
@@ -335,13 +330,10 @@ def get_server_ids(sb) -> list:
     return []
 
 # ============================================================
-# 续期单个服务器（通过 URL，使用原生滚动/点击）
+# 续期单个服务器（基于您提供的 HTML 结构精准定位）
 # ============================================================
 
 def renew_one_server_by_id(sb, server_id, index) -> dict:
-    """
-    通过 URL 直接访问服务器详情页，执行续期
-    """
     result = {
         "index": index,
         "server_id": server_id,
@@ -356,7 +348,20 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
         print(f"🌐 打开详情页: {detail_url}")
 
         sb.get(detail_url)
-        time.sleep(5)
+
+        # 等待页面关键文字出现，确保内容加载完成
+        print("⏳ 等待页面关键内容加载...")
+        try:
+            sb.wait_for_text("Server last renewed", timeout=15)
+            print("✅ 检测到 'Server last renewed' 文字")
+        except Exception:
+            try:
+                sb.wait_for_text("Expiry (Next Renewal)", timeout=10)
+                print("✅ 检测到 'Expiry (Next Renewal)' 文字")
+            except Exception:
+                print("⚠️ 未检测到预期文字，但继续尝试...")
+
+        time.sleep(2)
 
         current_url = sb.get_current_url()
         if "server" not in current_url.lower():
@@ -367,30 +372,98 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
 
         print(f"📄 当前页面: {current_url}")
 
-        # 查找 "Renew Server" 按钮
-        elements = sb.find_elements("button, a")
+        # ---------- 基于 HTML 结构精准定位 "Renew Server" 按钮 ----------
         renew_btn = None
-        for elem in elements:
-            text = (elem.text or "").strip()
-            if text.lower() == "renew server":
-                renew_btn = elem
-                break
 
-        if not renew_btn:
+        # 首选 XPath：找到包含 "Server last renewed" 的卡片，再找按钮
+        try:
+            renew_btn = sb.find_element(
+                "//div[contains(@data-slot,'card')][.//*[contains(text(),'Server last renewed')]]"
+                "//button[normalize-space()='Renew Server']",
+                timeout=5
+            )
+            print("✅ 通过卡片 + 文本定位到按钮")
+        except Exception:
+            pass
+
+        # 备选1：通过标题 "Renew" 所在的卡片找按钮
+        if renew_btn is None:
+            try:
+                renew_btn = sb.find_element(
+                    "//div[contains(@data-slot,'card')][.//*[contains(text(),'Renew') and @data-slot='card-title']]"
+                    "//button[normalize-space()='Renew Server']",
+                    timeout=5
+                )
+                print("✅ 通过 'Renew' 标题卡片定位到按钮")
+            except Exception:
+                pass
+
+        # 备选2：直接找按钮文本（兼容性）
+        if renew_btn is None:
+            try:
+                renew_btn = sb.find_element("//button[normalize-space()='Renew Server']", timeout=3)
+                print("✅ 直接通过按钮文本定位")
+            except Exception:
+                pass
+
+        # 备选3：遍历所有 button/a
+        if renew_btn is None:
+            print("⚠️ 未通过 XPath 定位，尝试遍历所有 button/a...")
+            try:
+                elements = sb.find_elements("button, a")
+                for elem in elements:
+                    if (elem.text or "").strip().lower() == "renew server":
+                        renew_btn = elem
+                        print("✅ 通过遍历找到按钮")
+                        break
+            except Exception as e:
+                print(f"⚠️ 遍历失败: {e}")
+
+        if renew_btn is None:
+            print("❌ 所有定位策略均失败")
+            # 保存截图并打印调试信息
+            try:
+                all_btns = sb.find_elements("button")
+                print("页面上所有 button 的文本（前20个）:")
+                for i, b in enumerate(all_btns[:20]):
+                    print(f"  {i}: '{b.text}'")
+            except:
+                pass
+            sb.save_screenshot(f"renew_button_not_found_{server_id}.png")
             result["status"] = "failed"
             result["detail"] = "未找到 Renew Server 按钮"
-            print("❌ 未找到 Renew Server 按钮")
-            sb.save_screenshot(f"renew_button_fail_{server_id}.png")
             return result
 
-        # 使用原生方法滚动和点击
-        sb.scroll_to(renew_btn)
-        time.sleep(0.5)
-        renew_btn.click()
-        print("✅ 已点击 Renew Server 按钮")
-        time.sleep(5)
+        # ---------- 点击按钮 ----------
+        try:
+            sb.scroll_to(renew_btn)
+            time.sleep(0.5)
+            try:
+                renew_btn.click()
+            except:
+                sb.execute_script("arguments[0].click();", renew_btn)
+            print("✅ 已点击 Renew Server 按钮")
+            time.sleep(5)
+        except Exception as e:
+            result["status"] = "error"
+            result["detail"] = f"点击按钮失败: {e}"
+            print(f"❌ {result['detail']}")
+            return result
 
-        # 检查续期结果
+        # ---------- 检查续期结果 ----------
+        # 检查是否有成功提示（可能是 div.alert-success 或类似）
+        try:
+            success_elem = sb.find_element("div.alert-success, div.alert-info", timeout=5)
+            if success_elem:
+                msg = success_elem.text.strip()
+                result["status"] = "success"
+                result["detail"] = msg
+                print(f"✅ 续期成功: {msg}")
+                return result
+        except Exception:
+            pass
+
+        # 检查普通 alert
         alert_text = read_alert(sb)
         if alert_text:
             print(f"📩 页面提示: {alert_text}")
@@ -403,18 +476,7 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
             else:
                 result["status"] = "unknown"
         else:
-            # 检查是否有成功提示框
-            try:
-                success_elem = sb.find_element("div.alert-success", timeout=3)
-                if success_elem:
-                    result["status"] = "success"
-                    result["detail"] = success_elem.text or "续期成功"
-                    print(f"✅ 检测到成功提示: {result['detail']}")
-                    return result
-            except Exception:
-                pass
-
-            print("ℹ️ 未检测到明确提示，假定续期请求已发送")
+            print("ℹ️ 未检测到明确提示，假定续期成功")
             result["status"] = "success"
             result["detail"] = "无提示，假定成功"
 
@@ -427,7 +489,7 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
         return result
 
 # ============================================================
-# 主续期流程
+# 主续期流程：遍历所有服务器 ID
 # ============================================================
 
 def renew_all_servers_by_id(sb) -> list:
@@ -449,6 +511,7 @@ def renew_all_servers_by_id(sb) -> list:
         results.append(result)
         print(f"📊 第 {idx+1} 个服务器 (ID={server_id}) 续期结果: {result['status']} - {result['detail']}")
 
+    # 汇总通知
     total = len(results)
     success = sum(1 for r in results if r['status'] == 'success')
     skipped = sum(1 for r in results if r['status'] == 'skipped')
