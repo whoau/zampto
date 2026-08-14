@@ -5,6 +5,7 @@ import os
 import time
 import requests
 from seleniumbase import SB
+from selenium.common.exceptions import NoSuchElementException
 
 
 # ============================================================
@@ -28,9 +29,9 @@ PROXY_SERVER = os.environ.get(
 
 BASE_URL = "https://dash.zampto.net"
 
-# 从 DevTools 截图确认的选择器
+# 从 DevTools 确认的选择器
 EMAIL_SELECTOR = "#email"
-PASSWORD_SELECTOR = "#password"          # 若实际为 name="password"，可改为 input[name="password"]
+PASSWORD_SELECTOR = "#password"  # 如果实际是 name="password"，可改为 input[name="password"]
 
 
 # ============================================================
@@ -114,38 +115,19 @@ def send_tg_message(
 
 
 # ============================================================
-# Cloudflare / 人机验证检测
+# Cloudflare / 人机验证检测（不再使用 JS）
 # ============================================================
 
 def has_challenge(sb) -> bool:
     """
     仅检测验证组件，不尝试绕过。
     """
-
-    try:
-        return bool(
-            sb.execute_script(
-                """
-                return Boolean(
-                    document.querySelector(
-                        'input[name="cf-turnstile-response"]'
-                    ) ||
-                    document.querySelector(
-                        'iframe[src*="challenges.cloudflare.com"]'
-                    ) ||
-                    document.querySelector(
-                        'altcha-widget'
-                    ) ||
-                    document.querySelector(
-                        '[class*="altcha"]'
-                    )
-                );
-                """
-            )
-        )
-
-    except Exception:
-        return False
+    return (
+        sb.is_element_present('input[name="cf-turnstile-response"]') or
+        sb.is_element_present('iframe[src*="challenges.cloudflare.com"]') or
+        sb.is_element_present('altcha-widget') or
+        sb.is_element_present('[class*="altcha"]')
+    )
 
 
 def wait_for_challenge_to_clear(
@@ -168,54 +150,44 @@ def wait_for_challenge_to_clear(
     for _ in range(timeout):
         time.sleep(1)
 
+        # 检查 cf-turnstile-response 是否有值（长度>20）
         try:
-            solved = sb.execute_script(
-                """
-                const cf =
-                    document.querySelector(
-                        'input[name="cf-turnstile-response"]'
-                    );
-
-                if (
-                    cf &&
-                    cf.value &&
-                    cf.value.length > 20
-                ) {
-                    return true;
-                }
-
-                const altcha =
-                    document.querySelector(
-                        'input[name*="altcha" i], '
-                        + 'input[name*="captcha" i]'
-                    );
-
-                if (
-                    altcha &&
-                    altcha.value &&
-                    altcha.value.length > 20
-                ) {
-                    return true;
-                }
-
-                return !document.querySelector(
-                    'iframe[src*="challenges.cloudflare.com"], '
-                    + 'altcha-widget'
-                );
-                """
+            cf_elem = sb.find_element(
+                'input[name="cf-turnstile-response"]',
+                timeout=0.5
             )
-
-            if solved:
-                print("✅ 验证已正常完成")
+            cf_val = cf_elem.get_attribute("value") or ""
+            if len(cf_val) > 20:
+                print("✅ 验证已正常完成 (cf-turnstile-response)")
                 return True
-
+        except NoSuchElementException:
+            pass
         except Exception:
             pass
+
+        # 检查 altcha 或 captcha 输入框
+        try:
+            altcha_elem = sb.find_element(
+                'input[name*="altcha" i], input[name*="captcha" i]',
+                timeout=0.5
+            )
+            altcha_val = altcha_elem.get_attribute("value") or ""
+            if len(altcha_val) > 20:
+                print("✅ 验证已正常完成 (altcha/captcha)")
+                return True
+        except NoSuchElementException:
+            pass
+        except Exception:
+            pass
+
+        # 检查验证组件是否已消失
+        if not has_challenge(sb):
+            print("✅ 验证组件已消失")
+            return True
 
     print(
         "❌ 人机验证未在限定时间内完成"
     )
-
     return False
 
 
@@ -401,7 +373,7 @@ def login(sb) -> bool:
         pass
 
     # --------------------------------------------------------
-    # 填写 Email（改用 SeleniumBase 原生方法）
+    # 填写 Email（使用 SeleniumBase 原生方法）
     # --------------------------------------------------------
 
     print(
@@ -418,7 +390,7 @@ def login(sb) -> bool:
         return False
 
     # --------------------------------------------------------
-    # 填写 Password（改用 SeleniumBase 原生方法）
+    # 填写 Password
     # --------------------------------------------------------
 
     print(
@@ -437,46 +409,16 @@ def login(sb) -> bool:
     time.sleep(1)
 
     # --------------------------------------------------------
-    # 再次确认输入框中确实有值
+    # 确认输入框中确实有值（使用 SeleniumBase 方法）
     # --------------------------------------------------------
 
     try:
-
-        email_value = sb.execute_script(
-            """
-            const el =
-                document.querySelector(arguments[0]);
-            return el ? el.value : "";
-            """,
-            EMAIL_SELECTOR
-        )
-
-        password_length = sb.execute_script(
-            """
-            const el =
-                document.querySelector(arguments[0]);
-            return el && el.value
-                ? el.value.length
-                : 0;
-            """,
-            PASSWORD_SELECTOR
-        )
-
-        print(
-            f"✅ Email 已填写，长度: "
-            f"{len(email_value or '')}"
-        )
-
-        print(
-            f"✅ Password 已填写，长度: "
-            f"{password_length}"
-        )
-
+        email_value = sb.get_value(EMAIL_SELECTOR) or ""
+        password_value = sb.get_value(PASSWORD_SELECTOR) or ""
+        print(f"✅ Email 已填写，长度: {len(email_value)}")
+        print(f"✅ Password 已填写，长度: {len(password_value)}")
     except Exception as exc:
-
-        print(
-            f"⚠️ 检查输入值失败: {exc}"
-        )
+        print(f"⚠️ 检查输入值失败: {exc}")
 
     # --------------------------------------------------------
     # Cloudflare
@@ -644,61 +586,27 @@ def login(sb) -> bool:
         return False
 
     # --------------------------------------------------------
-    # 点击 Login
+    # 滚动到按钮并点击
     # --------------------------------------------------------
 
     print(
-        "🖱️ 点击 Login……"
+        "🖱️ 滚动到 Login 按钮并点击……"
     )
 
     try:
-
-        sb.execute_script(
-            """
-            arguments[0].scrollIntoView({
-                block: "center"
-            });
-            """,
-            login_button
-        )
-
+        sb.scroll_to(login_button)
         time.sleep(0.5)
-
         login_button.click()
-
-        print(
-            "✅ Login 按钮已点击"
-        )
-
+        print("✅ Login 按钮已点击")
     except Exception as exc:
-
-        print(
-            f"⚠️ 普通点击失败: {exc}"
-        )
-
+        print(f"⚠️ 点击 Login 失败: {exc}")
+        # 备用：使用 SeleniumBase 的 click 方法（支持选择器）
         try:
-
-            sb.execute_script(
-                """
-                arguments[0].click();
-                """,
-                login_button
-            )
-
-            print(
-                "✅ 已使用 JS 点击 Login"
-            )
-
+            sb.click(login_button)  # 或 sb.click(EMAIL_SELECTOR) 但这里需要点击按钮，可以尝试通过文本定位
+            print("✅ 已通过 SeleniumBase 点击 Login")
         except Exception as exc2:
-
-            print(
-                f"❌ JS 点击也失败: {exc2}"
-            )
-
-            sb.save_screenshot(
-                "login_click_fail.png"
-            )
-
+            print(f"❌ 备用点击也失败: {exc2}")
+            sb.save_screenshot("login_click_fail.png")
             return False
 
     # --------------------------------------------------------
@@ -933,20 +841,10 @@ def goto_server_detail(sb) -> bool:
                         f"{text or selector}"
                     )
 
-                    sb.execute_script(
-                        """
-                        arguments[0]
-                        .scrollIntoView({
-                            block: "center"
-                        });
-                        """,
-                        element
-                    )
-
+                    # 滚动到元素
+                    sb.scroll_to(element)
                     time.sleep(0.5)
-
                     element.click()
-
                     time.sleep(5)
 
                     print(
@@ -985,9 +883,7 @@ def goto_server_detail(sb) -> bool:
                 )
 
                 element.click()
-
                 time.sleep(5)
-
                 return True
 
     except Exception:
@@ -1030,20 +926,9 @@ def open_renew_dialog(sb) -> bool:
                 "confirm renewal"
             }:
 
-                sb.execute_script(
-                    """
-                    arguments[0]
-                    .scrollIntoView({
-                        block: "center"
-                    });
-                    """,
-                    element
-                )
-
+                sb.scroll_to(element)
                 time.sleep(0.5)
-
                 element.click()
-
                 time.sleep(3)
 
                 print(
@@ -1131,7 +1016,6 @@ def submit_renew(sb) -> bool:
                 ):
 
                     button.click()
-
                     time.sleep(4)
 
                     print(
