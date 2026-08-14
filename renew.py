@@ -24,7 +24,7 @@ EMAIL_SELECTOR = "#email"
 PASSWORD_SELECTOR = "#password"
 
 # ============================================================
-# Telegram 通知（不变）
+# Telegram 通知
 # ============================================================
 
 def send_tg_message(status_icon: str, status_text: str, detail: str = ""):
@@ -61,10 +61,9 @@ def send_tg_message(status_icon: str, status_text: str, detail: str = ""):
         print(f"⚠️ Telegram 通知发送异常: {e}")
 
 # ============================================================
-# 验证绕过相关 JS 和工具函数（移植自 katabump）
+# Cloudflare Turnstile 绕过（移植自 katabump）
 # ============================================================
 
-# 用于展开 Turnstile 避免被父容器裁剪
 _EXPAND_JS = """
 (function() {
     var ts = document.querySelector('input[name="cf-turnstile-response"]');
@@ -102,7 +101,6 @@ _SOLVED_JS = """
 })()
 """
 
-# 用于激活浏览器窗口（确保 xdotool 点击有效）
 def _activate_window():
     for cls in ["chrome", "chromium", "Chromium", "Chrome", "google-chrome"]:
         try:
@@ -132,17 +130,14 @@ def _xdotool_click(x: int, y: int):
     except Exception:
         os.system(f"xdotool mousemove {x} {y} click 1 2>/dev/null")
 
-# 核心 Turnstile 处理函数（主动点击）
 def handle_turnstile(sb) -> bool:
     print("🔍 处理 Cloudflare Turnstile 验证...")
     time.sleep(2)
 
-    # 检查是否已静默通过
     if sb.execute_script(_SOLVED_JS):
         print("✅ 已静默通过")
         return True
 
-    # 尝试展开 Turnstile（防止被父容器裁剪）
     for _ in range(3):
         try:
             sb.execute_script(_EXPAND_JS)
@@ -150,7 +145,6 @@ def handle_turnstile(sb) -> bool:
             pass
         time.sleep(0.5)
 
-    # 使用 SeleniumBase 内置 uc_gui_click_captcha 处理 Turnstile
     for attempt in range(6):
         if sb.execute_script(_SOLVED_JS):
             print(f"✅ Turnstile 通过（第 {attempt} 次尝试）")
@@ -162,7 +156,6 @@ def handle_turnstile(sb) -> bool:
         except Exception as e:
             print(f"⚠️ uc_gui_click_captcha 调用异常: {e}")
 
-        # 等待验证结果（最多 8 秒）
         for _ in range(16):
             time.sleep(0.5)
             if sb.execute_script(_SOLVED_JS):
@@ -174,40 +167,8 @@ def handle_turnstile(sb) -> bool:
     print("  ❌ Turnstile 6 次均失败")
     return False
 
-# 可选：用于续期时可能出现的 ALTCHA 验证（简单版本）
-# 这里简化为仅检测并尝试点击，不做复杂坐标计算（可根据需要扩展）
-def handle_altcha(sb) -> bool:
-    print("🔐 处理 ALTCHA 验证（简化版）...")
-    # 检查是否有 ALTCHA 相关元素
-    try:
-        sb.find_element('[data-state="verified"], .altcha--verified', timeout=2)
-        print("✅ ALTCHA 已自动通过")
-        return True
-    except Exception:
-        pass
-
-    # 尝试点击 iframe 或 checkbox
-    try:
-        iframes = sb.find_elements('iframe[src*="altcha"]')
-        for ifr in iframes:
-            ifr.click()
-            time.sleep(1)
-    except Exception:
-        pass
-
-    # 检查是否通过
-    for _ in range(10):
-        try:
-            if sb.find_element('[data-state="verified"], .altcha--verified', timeout=1):
-                print("✅ ALTCHA 验证通过")
-                return True
-        except Exception:
-            pass
-        time.sleep(1)
-    return False
-
 # ============================================================
-# 原有辅助函数（读取 alert，JS 输入等）
+# 辅助函数
 # ============================================================
 
 def read_alert(sb) -> str:
@@ -222,7 +183,6 @@ def read_alert(sb) -> str:
     return ""
 
 def js_fill_input(sb, selector: str, text: str):
-    """使用 JS 设置输入框值，并触发事件（安全版本）"""
     safe_text = text.replace('\\', '\\\\').replace('"', '\\"')
     sb.execute_script(f"""
     (function(){{
@@ -242,7 +202,7 @@ def js_fill_input(sb, selector: str, text: str):
     """)
 
 # ============================================================
-# 登录函数（整合 Turnstile 处理）
+# 登录
 # ============================================================
 
 def login(sb) -> bool:
@@ -259,7 +219,6 @@ def login(sb) -> bool:
         print(f"⚠️ 打开登录页面失败: {exc}")
         return False
 
-    # 等待登录表单加载
     print("⏳ 等待登录表单加载……")
     try:
         sb.wait_for_element(EMAIL_SELECTOR, timeout=30)
@@ -283,14 +242,13 @@ def login(sb) -> bool:
     except Exception:
         pass
 
-    # 填写邮箱和密码（使用 JS 输入，更稳定）
     print(f"📧 填写邮箱 ({EMAIL_SELECTOR})……")
     js_fill_input(sb, EMAIL_SELECTOR, EMAIL)
     print(f"🔑 填写密码 ({PASSWORD_SELECTOR})……")
     js_fill_input(sb, PASSWORD_SELECTOR, PASSWORD)
     time.sleep(1)
 
-    # 检查是否触发了 Turnstile
+    # 处理 Turnstile（如果有）
     if sb.execute_script(_EXISTS_JS):
         print("🛡️ 检测到 Turnstile 验证，开始处理...")
         if not handle_turnstile(sb):
@@ -300,23 +258,19 @@ def login(sb) -> bool:
     else:
         print("ℹ️ 未检测到 Turnstile")
 
-    # 提交登录（敲回车）
     print("🖱️ 敲击回车提交表单...")
     sb.press_keys(PASSWORD_SELECTOR, '\n')
 
-    # 等待登录跳转
     print("⏳ 等待登录结果……")
     login_paths = {"/auth/login", "/login"}
     for i in range(30):
         time.sleep(1)
         current_url = sb.get_current_url()
         normalized = current_url.split("?", 1)[0].rstrip("/").lower()
-        # 提取 path
         if "://" in normalized:
             from urllib.parse import urlparse
             normalized = urlparse(normalized).path.rstrip("/").lower()
 
-        # 检测错误提示
         alert_text = read_alert(sb)
         if alert_text:
             lowered = alert_text.lower()
@@ -325,14 +279,12 @@ def login(sb) -> bool:
                 sb.save_screenshot("login_failed.png")
                 return False
 
-        # 如果已经离开登录页，视为成功
         if normalized not in login_paths:
             print("✅ 登录成功！")
             print(f"📄 当前 URL: {current_url}")
             print(f"📄 标题: {sb.get_title() or ''}")
             return True
 
-        # 如果表单消失也视为成功
         if not sb.is_element_present(EMAIL_SELECTOR) and not sb.is_element_present(PASSWORD_SELECTOR):
             print("✅ 登录表单已消失，判定登录成功")
             return True
@@ -342,7 +294,7 @@ def login(sb) -> bool:
     return False
 
 # ============================================================
-# 续期流程（沿用原有逻辑，增加验证处理）
+# 续期流程
 # ============================================================
 
 def goto_server_detail(sb) -> bool:
@@ -355,96 +307,119 @@ def goto_server_detail(sb) -> bool:
         send_tg_message("ℹ️", "未到续期时间", alert_text)
         return False
 
-    selectors = [
-        'a[href*="/server/"]',
-        'a[href*="/servers/"]',
-        'a[href*="server"]',
-    ]
-    for selector in selectors:
-        try:
-            elements = sb.find_elements(selector)
-            for element in elements:
-                text = (element.text or "").strip().lower()
-                if any(word in text for word in ("view server", "server", "view", "see")):
-                    print(f"✅ 找到服务器入口: {text or selector}")
-                    sb.scroll_to(element)
-                    time.sleep(0.5)
-                    element.click()
-                    time.sleep(5)
-                    print(f"📄 当前页面: {sb.get_current_url()}")
-                    return True
-        except Exception:
-            continue
-
-    # 备用：通过文本找
+    # 精确匹配 "View Server" 链接
     try:
-        for element in sb.find_elements("a, button"):
-            text = (element.text or "").strip().lower()
-            if text in {"view server", "view", "see"}:
-                element.click()
-                time.sleep(5)
-                return True
-    except Exception:
-        pass
+        view_link = sb.find_element("//a[contains(text(),'View Server')]", timeout=5)
+        print(f"✅ 找到 View Server 链接: {view_link.text}")
+        sb.scroll_to(view_link)
+        time.sleep(0.5)
+        view_link.click()
+        time.sleep(5)
+        print(f"📄 点击后当前页面: {sb.get_current_url()}")
+        if "server" in sb.get_current_url().lower():
+            return True
+        else:
+            print("⚠️ 点击后未进入服务器详情页，尝试其他方法...")
+    except Exception as e:
+        print(f"⚠️ 通过 XPath 查找 View Server 失败: {e}")
 
-    print("❌ 未找到服务器详情入口")
+    # 备用：遍历所有 a 标签
+    try:
+        all_links = sb.find_elements("a")
+        print(f"🔎 页面共有 {len(all_links)} 个链接")
+        for a in all_links:
+            text = (a.text or "").strip()
+            if text.lower() == "view server":
+                print(f"✅ 通过文本匹配找到: {text}")
+                sb.scroll_to(a)
+                a.click()
+                time.sleep(5)
+                if "server" in sb.get_current_url().lower():
+                    return True
+    except Exception as e:
+        print(f"⚠️ 遍历链接失败: {e}")
+
+    print("❌ 未找到 'View Server' 入口")
     sb.save_screenshot("servers_page_fail.png")
     return False
 
 def open_renew_dialog(sb) -> bool:
-    print("\n🔄 查找续期按钮……")
-    try:
-        for element in sb.find_elements("button, a"):
-            text = (element.text or "").strip().lower()
-            if text in {"renew server", "renew", "confirm renewal"}:
-                sb.scroll_to(element)
-                time.sleep(0.5)
-                element.click()
-                time.sleep(3)
-                print(f"✅ 已点击续期按钮: {text}")
-                return True
-    except Exception as exc:
-        print(f"⚠️ 查找续期按钮时出错: {exc}")
-    print("❌ 未找到续期按钮")
-    sb.save_screenshot("renew_button_fail.png")
-    return False
+    print("\n🔄 查找 'Renew Server' 按钮……")
+    time.sleep(3)
+    print(f"当前 URL: {sb.get_current_url()}")
+    print(f"页面标题: {sb.get_title() or ''}")
 
-def submit_renew(sb) -> bool:
-    # 如果续期过程中出现验证，简单处理一下（Turnstile 或 ALTCHA）
-    if sb.execute_script(_EXISTS_JS):
-        print("🛡️ 续期时出现 Turnstile，处理中...")
-        if not handle_turnstile(sb):
-            print("⚠️ Turnstile 处理失败，尝试继续")
-    else:
-        # 尝试检测 ALTCHA
-        try:
-            sb.find_element('iframe[src*="altcha"]', timeout=2)
-            print("🔐 检测到 ALTCHA，尝试处理...")
-            handle_altcha(sb)
-        except Exception:
-            pass
+    renew_btn = None
 
-    print("🖱️ 点击确认续期按钮……")
+    # 尝试多种 XPath 定位（同时支持 button 和 a）
     selectors = [
-        "div.modal.show button.btn-primary",
-        "div.modal.show button[type='submit']",
-        "button[type='submit']",
+        "//button[contains(text(),'Renew Server')]",
+        "//a[contains(text(),'Renew Server')]",
+        "//*[contains(text(),'Renew Server') and (self::button or self::a)]",
     ]
-    for selector in selectors:
+    for xpath in selectors:
         try:
-            buttons = sb.find_elements(selector)
-            for button in buttons:
-                text = (button.text or "").strip().lower()
-                if not text or any(word in text for word in ("renew", "confirm", "submit")):
-                    button.click()
-                    time.sleep(4)
-                    print("✅ 续期确认按钮已点击")
-                    return True
+            renew_btn = sb.find_element(xpath, timeout=3)
+            if renew_btn:
+                print(f"✅ 通过 XPath 找到: {xpath}")
+                break
         except Exception:
             continue
-    print("❌ 未找到确认续期按钮")
-    sb.save_screenshot("renew_submit_fail.png")
-    return False
+
+    if renew_btn is None:
+        print("⚠️ XPath 未命中，遍历所有可点击元素...")
+        try:
+            elements = sb.find_elements("button, a, input[type='button']")
+            for elem in elements:
+                if "renew server" in (elem.text or "").lower():
+                    renew_btn = elem
+                    print("✅ 通过遍历找到 'Renew Server'")
+                    break
+        except Exception as e:
+            print(f"⚠️ 遍历元素失败: {e}")
+
+    if renew_btn is None:
+        print("❌ 未找到 'Renew Server' 按钮")
+        try:
+            all_elements = sb.find_elements("button, a")
+            print("页面所有 button/a 文本:")
+            for e in all_elements[:20]:
+                print(f"  - {e.text}")
+        except Exception:
+            pass
+        sb.save_screenshot("renew_button_fail.png")
+        return False
+
+    try:
+        sb.scroll_to(renew_btn)
+        time.sleep(0.5)
+        renew_btn.click()
+        print("✅ 已点击 'Renew Server' 按钮")
+        time.sleep(3)
+        return True
+    except Exception as e:
+        print(f"⚠️ 点击失败: {e}")
+        try:
+            sb.execute_script("arguments[0].click();", renew_btn)
+            print("✅ 使用 JS 点击成功")
+            time.sleep(3)
+            return True
+        except Exception as e2:
+            print(f"❌ JS 点击也失败: {e2}")
+            return False
+
+def submit_renew(sb) -> bool:
+    print("⏳ 等待续期结果反馈（5秒）...")
+    time.sleep(5)
+
+    alert_text = read_alert(sb)
+    if alert_text:
+        print(f"📩 页面提示: {alert_text}")
+        # 无论提示什么，都继续让 check_renew_result 判断
+        return True
+    else:
+        print("ℹ️ 未检测到明确提示，默认续期请求已发送")
+        return True
 
 def check_renew_result(sb):
     print("\n📋 检查续期结果……")
@@ -501,7 +476,6 @@ def main():
 
     try:
         with SB(**sb_kwargs) as sb:
-            # 获取出口 IP
             try:
                 sb.open("https://api.ip.sb/ip")
                 exit_ip = sb.get_text("body").strip()
