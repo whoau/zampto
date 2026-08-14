@@ -4,7 +4,7 @@ on:
   schedule:
     # 每4天北京时间上午10点运行一次
     # UTC 02:00 = 北京时间 10:00
-    - cron: "0 2 */4 * *"
+    - cron: "0 15 * * *"
 
   # 允许手动运行
   workflow_dispatch:
