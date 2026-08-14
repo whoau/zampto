@@ -31,7 +31,7 @@ BASE_URL = "https://dash.zampto.net"
 
 # 从 DevTools 确认的选择器
 EMAIL_SELECTOR = "#email"
-PASSWORD_SELECTOR = "#password"  # 如果实际是 name="password"，可改为 input[name="password"]
+PASSWORD_SELECTOR = "#password"
 
 
 # ============================================================
@@ -115,7 +115,7 @@ def send_tg_message(
 
 
 # ============================================================
-# Cloudflare / 人机验证检测（不再使用 JS）
+# Cloudflare / 人机验证检测（纯 SeleniumBase 方法）
 # ============================================================
 
 def has_challenge(sb) -> bool:
@@ -132,7 +132,7 @@ def has_challenge(sb) -> bool:
 
 def wait_for_challenge_to_clear(
     sb,
-    timeout: int = 30
+    timeout: int = 60
 ) -> bool:
     """
     等待网站自行完成或用户合法完成验证。
@@ -213,7 +213,7 @@ def read_alert(sb) -> str:
 
 
 # ============================================================
-# 登录
+# 登录（优化版：先验证再等表单）
 # ============================================================
 
 def login(sb) -> bool:
@@ -244,7 +244,29 @@ def login(sb) -> bool:
         return False
 
     # --------------------------------------------------------
-    # 等待页面 / SPA 渲染
+    # 先处理可能出现的 Cloudflare 验证（重要调整）
+    # --------------------------------------------------------
+
+    if has_challenge(sb):
+        print(
+            "🛡️ 检测到人机验证，"
+            "等待正常完成……"
+        )
+        if not wait_for_challenge_to_clear(
+            sb,
+            timeout=60
+        ):
+            sb.save_screenshot(
+                "login_challenge.png"
+            )
+            return False
+    else:
+        print(
+            "ℹ️ 未检测到人机验证组件"
+        )
+
+    # --------------------------------------------------------
+    # 等待登录表单加载
     # --------------------------------------------------------
 
     print(
@@ -421,32 +443,22 @@ def login(sb) -> bool:
         print(f"⚠️ 检查输入值失败: {exc}")
 
     # --------------------------------------------------------
-    # Cloudflare
+    # 再次检查验证（可能在填写后触发）
     # --------------------------------------------------------
 
     if has_challenge(sb):
-
         print(
-            "🛡️ 检测到人机验证，"
+            "🛡️ 填写后再次检测到人机验证，"
             "等待正常完成……"
         )
-
         if not wait_for_challenge_to_clear(
             sb,
-            timeout=30
+            timeout=60
         ):
-
             sb.save_screenshot(
-                "login_challenge.png"
+                "login_challenge_after_fill.png"
             )
-
             return False
-
-    else:
-
-        print(
-            "ℹ️ 未检测到人机验证组件"
-        )
 
     # --------------------------------------------------------
     # 查找 Login 按钮
@@ -600,9 +612,9 @@ def login(sb) -> bool:
         print("✅ Login 按钮已点击")
     except Exception as exc:
         print(f"⚠️ 点击 Login 失败: {exc}")
-        # 备用：使用 SeleniumBase 的 click 方法（支持选择器）
+        # 备用：使用 SeleniumBase 的 click 方法
         try:
-            sb.click(login_button)  # 或 sb.click(EMAIL_SELECTOR) 但这里需要点击按钮，可以尝试通过文本定位
+            sb.click(login_button)
             print("✅ 已通过 SeleniumBase 点击 Login")
         except Exception as exc2:
             print(f"❌ 备用点击也失败: {exc2}")
@@ -966,7 +978,7 @@ def submit_renew(sb) -> bool:
 
         if not wait_for_challenge_to_clear(
             sb,
-            timeout=30
+            timeout=60
         ):
 
             sb.save_screenshot(
@@ -1186,6 +1198,7 @@ def main():
 
     sb_kwargs = {
         "uc": True,
+        "uc_cdp": True,          # 启用 CDP 规避，降低被检测概率
         "headless": False,
     }
 
