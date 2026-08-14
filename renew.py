@@ -17,7 +17,7 @@ PROXY_SERVER = os.environ.get(
     "PROXY_SERVER", "http://127.0.0.1:1081"
 ).strip()
 
-BASE_URL = "https://dash.zampto.net/auth/login"
+BASE_URL = "https://dash.zampto.net/"
 
 
 def send_tg_message(status_icon: str, status_text: str, detail: str = ""):
