@@ -3,6 +3,7 @@
 
 import os
 import time
+import re
 import subprocess
 import requests
 from seleniumbase import SB
@@ -294,47 +295,111 @@ def login(sb) -> bool:
     return False
 
 # ============================================================
-# 续期单个服务器（传入 sb 和当前页面的 View Server 元素）
+# 获取服务器 ID 列表（从列表页）
 # ============================================================
 
-def renew_one_server(sb, server_link_element, index) -> dict:
+def get_server_ids(sb) -> list:
     """
-    点击 server_link_element 进入详情页，执行续期，返回结果字典
+    在服务器列表页（https://dash.zampto.net/）提取所有服务器 ID
+    通过查找包含 "ID: 数字" 的文本元素
+    """
+    print("🔍 正在提取服务器 ID 列表...")
+    time.sleep(5)  # 等待页面渲染
+
+    server_ids = []
+
+    try:
+        # 方法1：通过文本 "ID: 数字" 匹配
+        page_text = sb.get_page_source()
+        # 使用正则匹配 ID: 后面的数字
+        pattern = r'ID:\s*(\d+)'
+        matches = re.findall(pattern, page_text)
+        if matches:
+            server_ids = list(set(matches))  # 去重
+            print(f"✅ 通过正则找到 {len(server_ids)} 个服务器 ID: {server_ids}")
+            return server_ids
+    except Exception as e:
+        print(f"⚠️ 正则提取 ID 失败: {e}")
+
+    try:
+        # 方法2：遍历所有元素，查找包含 "ID:" 的文本
+        all_elements = sb.find_elements("*")
+        for elem in all_elements:
+            text = (elem.text or "").strip()
+            if "ID:" in text:
+                # 提取数字
+                parts = text.split("ID:")
+                if len(parts) > 1:
+                    id_part = parts[1].strip().split()[0]
+                    if id_part.isdigit():
+                        server_ids.append(id_part)
+        if server_ids:
+            server_ids = list(set(server_ids))
+            print(f"✅ 通过遍历找到 {len(server_ids)} 个服务器 ID: {server_ids}")
+            return server_ids
+    except Exception as e:
+        print(f"⚠️ 遍历提取 ID 失败: {e}")
+
+    # 方法3：如果没有找到，尝试从 URL 中提取（当前页面可能就是详情页）
+    current_url = sb.get_current_url()
+    if "id=" in current_url:
+        import urllib.parse
+        parsed = urllib.parse.urlparse(current_url)
+        params = urllib.parse.parse_qs(parsed.query)
+        if "id" in params:
+            server_ids = params["id"]
+            print(f"✅ 从当前 URL 提取到 ID: {server_ids}")
+            return server_ids
+
+    print("❌ 未能提取到任何服务器 ID")
+    return []
+
+# ============================================================
+# 续期单个服务器（通过 URL 直接访问）
+# ============================================================
+
+def renew_one_server_by_id(sb, server_id, index) -> dict:
+    """
+    通过 URL 直接访问服务器详情页，执行续期
     """
     result = {
         "index": index,
-        "server_name": "",
+        "server_id": server_id,
+        "server_name": f"Server-{server_id}",
         "status": "unknown",
         "detail": ""
     }
 
     try:
-        # 获取服务器名称（用于日志）
-        name = (server_link_element.text or "").strip() or f"Server-{index}"
-        result["server_name"] = name
-        print(f"\n🔄 正在处理第 {index+1} 个服务器: {name}")
+        detail_url = f"{BASE_URL}/server?id={server_id}"
+        print(f"\n🔄 正在处理第 {index+1} 个服务器: ID={server_id}")
+        print(f"🌐 打开详情页: {detail_url}")
 
-        # 点击 View Server（使用 JS）
-        sb.execute_script("arguments[0].scrollIntoView({block:'center'});", server_link_element)
-        time.sleep(0.5)
-        sb.execute_script("arguments[0].click();", server_link_element)
-        time.sleep(5)  # 等待详情页加载
+        # 直接打开详情页
+        sb.get(detail_url)
+        time.sleep(5)  # 等待页面加载
 
-        # 检查是否进入详情页（URL 包含 server）
+        # 检查页面是否加载成功
         current_url = sb.get_current_url()
         if "server" not in current_url.lower():
             result["status"] = "failed"
             result["detail"] = "未进入详情页"
-            print(f"❌ 点击 View Server 后未进入详情页")
+            print(f"❌ 未进入详情页，当前 URL: {current_url}")
             return result
 
-        print(f"📄 进入详情页: {current_url}")
+        print(f"📄 当前页面: {current_url}")
 
-        # 在详情页查找 "Renew Server" 按钮
+        # 检查续期状态：是否已过期或已续期
+        # 从截图中看到有 "Expiry (Next Renewal): Expired" 和 "Server last renewed: Aug 12, 2026"
+        # 这些信息可以帮助判断是否需要续期，但我们直接点击 Renew Server 按钮即可
+        # 如果已经续期，按钮可能不可用或会提示错误
+
+        # 查找 "Renew Server" 按钮
         elements = sb.find_elements("button, a")
         renew_btn = None
         for elem in elements:
-            if (elem.text or "").strip().lower() == "renew server":
+            text = (elem.text or "").strip()
+            if text.lower() == "renew server":
                 renew_btn = elem
                 break
 
@@ -342,13 +407,10 @@ def renew_one_server(sb, server_link_element, index) -> dict:
             result["status"] = "failed"
             result["detail"] = "未找到 Renew Server 按钮"
             print("❌ 未找到 Renew Server 按钮")
-            sb.save_screenshot(f"renew_button_fail_{index}.png")
-            # 返回列表页
-            sb.back()
-            time.sleep(3)
+            sb.save_screenshot(f"renew_button_fail_{server_id}.png")
             return result
 
-        # 点击 Renew Server
+        # 点击 Renew Server（使用 JS）
         sb.execute_script("arguments[0].scrollIntoView({block:'center'});", renew_btn)
         time.sleep(0.5)
         sb.execute_script("arguments[0].click();", renew_btn)
@@ -368,63 +430,53 @@ def renew_one_server(sb, server_link_element, index) -> dict:
             else:
                 result["status"] = "unknown"
         else:
-            # 没有 alert，可能续期已直接生效或未触发提示，暂定为成功
+            # 检查页面是否有成功提示（如绿色横幅）
+            try:
+                success_elem = sb.find_element("div.alert-success", timeout=3)
+                if success_elem:
+                    result["status"] = "success"
+                    result["detail"] = success_elem.text or "续期成功"
+                    print(f"✅ 检测到成功提示: {result['detail']}")
+                    return result
+            except Exception:
+                pass
+
             print("ℹ️ 未检测到明确提示，假定续期请求已发送")
             result["status"] = "success"
             result["detail"] = "无提示，假定成功"
 
-        # 返回服务器列表页
-        sb.back()
-        time.sleep(3)
         return result
 
     except Exception as e:
-        print(f"⚠️ 处理第 {index+1} 个服务器时发生异常: {e}")
+        print(f"⚠️ 处理服务器 ID={server_id} 时发生异常: {e}")
         result["status"] = "error"
         result["detail"] = str(e)
-        # 尝试返回列表
-        try:
-            sb.back()
-            time.sleep(3)
-        except:
-            pass
         return result
 
 # ============================================================
-# 主续期流程：遍历所有 View Server
+# 主续期流程：通过 ID 遍历所有服务器
 # ============================================================
 
-def renew_all_servers(sb) -> list:
+def renew_all_servers_by_id(sb) -> list:
     print("\n" + "#" * 25)
-    print("   开始 ZamPTO 自动续期流程（全部服务器）")
+    print("   开始 ZamPTO 自动续期流程（通过服务器 ID）")
     print("#" * 25)
 
-    # 等待列表页加载
-    time.sleep(4)
+    # 获取所有服务器 ID
+    server_ids = get_server_ids(sb)
 
-    # 收集所有 "View Server" 链接
-    try:
-        all_links = sb.find_elements("a")
-        view_links = []
-        for a in all_links:
-            if (a.text or "").strip().lower() == "view server":
-                view_links.append(a)
-        print(f"🔎 找到 {len(view_links)} 个 'View Server' 链接")
-    except Exception as e:
-        print(f"❌ 收集链接失败: {e}")
+    if not server_ids:
+        print("❌ 未获取到任何服务器 ID")
         return []
 
-    if not view_links:
-        print("❌ 未找到任何 'View Server' 链接")
-        return []
+    print(f"📋 待续期服务器 ID 列表: {server_ids}")
 
     # 逐个续期
     results = []
-    for idx, link in enumerate(view_links):
-        result = renew_one_server(sb, link, idx)
+    for idx, server_id in enumerate(server_ids):
+        result = renew_one_server_by_id(sb, server_id, idx)
         results.append(result)
-        # 每处理完一个，打印当前结果
-        print(f"📊 第 {idx+1} 个服务器续期结果: {result['status']} - {result['detail']}")
+        print(f"📊 第 {idx+1} 个服务器 (ID={server_id}) 续期结果: {result['status']} - {result['detail']}")
 
     # 汇总通知
     total = len(results)
@@ -440,7 +492,7 @@ def renew_all_servers(sb) -> list:
     )
     detail_lines = []
     for r in results:
-        detail_lines.append(f"  #{r['index']+1} {r['server_name']}: {r['status']} - {r['detail']}")
+        detail_lines.append(f"  #{r['index']+1} ID={r['server_id']}: {r['status']} - {r['detail']}")
     detail = "\n".join(detail_lines)
 
     send_tg_message("📋", summary, detail)
@@ -487,9 +539,8 @@ def main():
 
             if login(sb):
                 print("\n🎉 登录流程成功")
-                # 登录后，当前页面应该是服务器列表页 (dashboard)
-                # 直接调用续期全部
-                renew_all_servers(sb)
+                # 登录后，当前页面是仪表盘，开始续期
+                renew_all_servers_by_id(sb)
             else:
                 print("\n❌ 登录失败，终止续期操作。")
                 send_tg_message("❌", "登录失败")
