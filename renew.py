@@ -327,7 +327,7 @@ def get_server_ids(sb) -> list:
     return []
 
 # ============================================================
-# 续期单个服务器（使用 xdotool 物理点击）
+# 续期单个服务器（利用您提供的HTML结构精确定位）
 # ============================================================
 
 def renew_one_server_by_id(sb, server_id, index) -> dict:
@@ -368,40 +368,26 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
 
         print(f"📄 当前页面: {current_url}")
 
-        # ---------- 定位 "Renew Server" 按钮 ----------
-        renew_btn = None
-
-        # XPath 定位
+        # ---------- 使用您提供的HTML结构精确定位 ----------
+        # 直接使用XPath定位卡片内的按钮
+        xpath = "//div[@data-slot='card'][.//div[contains(text(),'Server last renewed')]]//button[normalize-space()='Renew Server']"
         try:
-            renew_btn = sb.find_element(
-                "//div[contains(@data-slot,'card')][.//*[contains(text(),'Server last renewed')]]"
-                "//button[normalize-space()='Renew Server']",
-                timeout=5
-            )
-            print("✅ 通过卡片 + 文本定位到按钮")
+            renew_btn = sb.find_element(xpath, timeout=5)
+            print("✅ 通过精确 XPath 定位到 Renew Server 按钮")
         except Exception:
-            pass
+            renew_btn = None
 
-        if renew_btn is None:
-            try:
-                renew_btn = sb.find_element(
-                    "//div[contains(@data-slot,'card')][.//*[contains(text(),'Renew') and @data-slot='card-title']]"
-                    "//button[normalize-space()='Renew Server']",
-                    timeout=5
-                )
-                print("✅ 通过 'Renew' 标题卡片定位到按钮")
-            except Exception:
-                pass
-
+        # 如果上面找不到，直接通过按钮文本定位
         if renew_btn is None:
             try:
                 renew_btn = sb.find_element("//button[normalize-space()='Renew Server']", timeout=3)
-                print("✅ 直接通过按钮文本定位")
+                print("✅ 通过按钮文本定位到 Renew Server 按钮")
             except Exception:
                 pass
 
+        # 如果还是找不到，遍历所有button/a
         if renew_btn is None:
-            print("⚠️ 未通过 XPath 定位，尝试遍历所有 button/a...")
+            print("⚠️ XPath 定位失败，尝试遍历所有 button/a...")
             try:
                 elements = sb.find_elements("button, a")
                 for elem in elements:
@@ -414,40 +400,52 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
 
         if renew_btn is None:
             print("❌ 所有定位策略均失败")
-            try:
-                all_btns = sb.find_elements("button")
-                print("页面上所有 button 的文本（前20个）:")
-                for i, b in enumerate(all_btns[:20]):
-                    print(f"  {i}: '{b.text}'")
-            except:
-                pass
             sb.save_screenshot(f"renew_button_not_found_{server_id}.png")
             result["status"] = "failed"
             result["detail"] = "未找到 Renew Server 按钮"
             return result
 
-        # ---------- 使用 xdotool 物理点击 ----------
+        # ---------- 使用 JavaScript 获取坐标，再通过 xdotool 物理点击 ----------
         try:
             # 激活窗口
             _activate_window()
-            # 获取元素坐标
-            location = renew_btn.location
-            size = renew_btn.size
-            x = location['x'] + size['width'] // 2
-            y = location['y'] + size['height'] // 2
-            # 获取窗口偏移（考虑标题栏）
-            try:
-                win_info = sb.execute_script("return {sx: window.screenX || 0, sy: window.screenY || 0, oh: window.outerHeight, ih: window.innerHeight};")
-                bar = win_info['oh'] - win_info['ih']
-                screen_x = x + win_info['sx']
-                screen_y = y + win_info['sy'] + bar
-            except:
-                screen_x = x
-                screen_y = y
+
+            # 获取元素在视口中的坐标
+            coords = sb.execute_script("""
+                var el = arguments[0];
+                var rect = el.getBoundingClientRect();
+                return {
+                    x: Math.round(rect.left + rect.width / 2),
+                    y: Math.round(rect.top + rect.height / 2)
+                };
+            """, renew_btn)
+
+            if not coords:
+                raise Exception("JavaScript 返回坐标为空")
+
+            # 获取窗口偏移
+            win_info = sb.execute_script("""
+                return {
+                    sx: window.screenX || 0,
+                    sy: window.screenY || 0,
+                    oh: window.outerHeight || 0,
+                    ih: window.innerHeight || 0
+                };
+            """)
+
+            # 计算标题栏高度
+            bar = win_info.get('oh', 0) - win_info.get('ih', 0)
+            if bar < 0:
+                bar = 0
+
+            screen_x = coords['x'] + win_info.get('sx', 0)
+            screen_y = coords['y'] + win_info.get('sy', 0) + bar
+
             print(f"🖱️ 准备点击坐标: ({screen_x}, {screen_y})")
             _xdotool_click(screen_x, screen_y)
             print("✅ 已通过 xdotool 物理点击 Renew Server 按钮")
             time.sleep(5)
+
         except Exception as e:
             result["status"] = "error"
             result["detail"] = f"物理点击失败: {e}"
