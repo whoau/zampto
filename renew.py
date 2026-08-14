@@ -327,7 +327,7 @@ def get_server_ids(sb) -> list:
     return []
 
 # ============================================================
-# 续期单个服务器（修复版）
+# 续期单个服务器（完全修复版 - 使用 JavaScript 直接点击）
 # ============================================================
 
 def renew_one_server_by_id(sb, server_id, index) -> dict:
@@ -368,141 +368,177 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
 
         print(f"📄 当前页面: {current_url}")
 
-        # ---------- 使用您提供的HTML结构精确定位 ----------
-        # 直接使用XPath定位卡片内的按钮
-        xpath = "//div[@data-slot='card'][.//div[contains(text(),'Server last renewed')]]//button[normalize-space()='Renew Server']"
-        try:
-            renew_btn = sb.find_element(xpath, timeout=5)
-            print("✅ 通过精确 XPath 定位到 Renew Server 按钮")
-        except Exception:
-            renew_btn = None
-
-        # 如果上面找不到，直接通过按钮文本定位
-        if renew_btn is None:
-            try:
-                renew_btn = sb.find_element("//button[normalize-space()='Renew Server']", timeout=3)
-                print("✅ 通过按钮文本定位到 Renew Server 按钮")
-            except Exception:
-                pass
-
-        # 如果还是找不到，遍历所有button/a
-        if renew_btn is None:
-            print("⚠️ XPath 定位失败，尝试遍历所有 button/a...")
-            try:
-                elements = sb.find_elements("button, a")
-                for elem in elements:
-                    if (elem.text or "").strip().lower() == "renew server":
-                        renew_btn = elem
-                        print("✅ 通过遍历找到按钮")
-                        break
-            except Exception as e:
-                print(f"⚠️ 遍历失败: {e}")
-
-        if renew_btn is None:
-            print("❌ 所有定位策略均失败")
-            sb.save_screenshot(f"renew_button_not_found_{server_id}.png")
-            result["status"] = "failed"
-            result["detail"] = "未找到 Renew Server 按钮"
-            return result
-
-        # ---------- 使用多种点击方式（备选方案） ----------
+        # ---------- 使用纯 JavaScript 查找并点击按钮 ----------
         click_success = False
         
-        # 方式1: Selenium 原生点击
-        print("🖱️ 尝试方式1: Selenium 原生点击")
+        print("🖱️ 方式1: 通过 XPath 精确定位并 JavaScript 点击")
+        click_script_1 = """
+        (function() {
+            var xpath = "//div[@data-slot='card'][.//div[contains(text(),'Server last renewed')]]//button[normalize-space()='Renew Server']";
+            var button = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+            if (button) {
+                button.scrollIntoView({behavior: 'smooth', block: 'center'});
+                setTimeout(function() { button.click(); }, 500);
+                return 'success';
+            }
+            return 'not_found';
+        })();
+        """
         try:
-            # 先滚动到元素可见
-            sb.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", renew_btn)
-            time.sleep(1)
-            renew_btn.click()
-            print("✅ 原生点击成功")
-            click_success = True
-            time.sleep(5)
-        except Exception as e1:
-            print(f"⚠️ 原生点击失败: {e1}")
-            
-            # 方式2: JavaScript 点击
-            print("🖱️ 尝试方式2: JavaScript 点击")
-            try:
-                sb.execute_script("arguments[0].click();", renew_btn)
-                print("✅ JavaScript 点击成功")
+            result_msg = sb.execute_script(click_script_1)
+            if result_msg == 'success':
+                print("✅ XPath 定位并点击成功")
                 click_success = True
                 time.sleep(5)
-            except Exception as e2:
-                print(f"⚠️ JavaScript 点击失败: {e2}")
-                
-                # 方式3: SeleniumBase 点击
-                print("🖱️ 尝试方式3: SeleniumBase 点击")
-                try:
-                    sb.click(renew_btn)
-                    print("✅ SeleniumBase 点击成功")
+        except Exception as e1:
+            print(f"⚠️ XPath 方式失败: {e1}")
+
+        if not click_success:
+            print("🖱️ 方式2: 通过按钮文本查找并 JavaScript 点击")
+            click_script_2 = """
+            (function() {
+                var buttons = document.querySelectorAll('button');
+                for (var i = 0; i < buttons.length; i++) {
+                    if (buttons[i].textContent.trim() === 'Renew Server') {
+                        buttons[i].scrollIntoView({behavior: 'smooth', block: 'center'});
+                        setTimeout(function() { buttons[i].click(); }, 500);
+                        return 'success';
+                    }
+                }
+                return 'not_found';
+            })();
+            """
+            try:
+                result_msg = sb.execute_script(click_script_2)
+                if result_msg == 'success':
+                    print("✅ 按钮文本定位并点击成功")
                     click_success = True
                     time.sleep(5)
-                except Exception as e3:
-                    print(f"⚠️ SeleniumBase 点击失败: {e3}")
+            except Exception as e2:
+                print(f"⚠️ 按钮文本方式失败: {e2}")
+
+        if not click_success:
+            print("🖱️ 方式3: 通过 data-slot 和文本组合查找")
+            click_script_3 = """
+            (function() {
+                var cards = document.querySelectorAll('div[data-slot="card"]');
+                for (var i = 0; i < cards.length; i++) {
+                    var card = cards[i];
+                    if (card.textContent.includes('Server last renewed')) {
+                        var buttons = card.querySelectorAll('button');
+                        for (var j = 0; j < buttons.length; j++) {
+                            if (buttons[j].textContent.includes('Renew Server')) {
+                                buttons[j].scrollIntoView({behavior: 'smooth', block: 'center'});
+                                setTimeout(function() { buttons[j].click(); }, 500);
+                                return 'success';
+                            }
+                        }
+                    }
+                }
+                return 'not_found';
+            })();
+            """
+            try:
+                result_msg = sb.execute_script(click_script_3)
+                if result_msg == 'success':
+                    print("✅ data-slot 组合定位并点击成功")
+                    click_success = True
+                    time.sleep(5)
+            except Exception as e3:
+                print(f"⚠️ data-slot 方式失败: {e3}")
+
+        if not click_success:
+            print("🖱️ 方式4: 通过渐变背景样式查找按钮")
+            click_script_4 = """
+            (function() {
+                var buttons = document.querySelectorAll('button');
+                for (var i = 0; i < buttons.length; i++) {
+                    var classList = buttons[i].className;
+                    if (classList.includes('from-purple-600') && 
+                        classList.includes('to-purple-700') && 
+                        buttons[i].textContent.includes('Renew Server')) {
+                        buttons[i].scrollIntoView({behavior: 'smooth', block: 'center'});
+                        setTimeout(function() { buttons[i].click(); }, 500);
+                        return 'success';
+                    }
+                }
+                return 'not_found';
+            })();
+            """
+            try:
+                result_msg = sb.execute_script(click_script_4)
+                if result_msg == 'success':
+                    print("✅ 样式类定位并点击成功")
+                    click_success = True
+                    time.sleep(5)
+            except Exception as e4:
+                print(f"⚠️ 样式类方式失败: {e4}")
+
+        if not click_success:
+            print("🖱️ 方式5: xdotool 物理点击（最后备选）")
+            try:
+                # 先用 JavaScript 找到按钮并标记
+                mark_script = """
+                (function() {
+                    var buttons = document.querySelectorAll('button');
+                    for (var i = 0; i < buttons.length; i++) {
+                        if (buttons[i].textContent.trim() === 'Renew Server') {
+                            buttons[i].setAttribute('data-renew-target', 'true');
+                            buttons[i].scrollIntoView({behavior: 'smooth', block: 'center'});
+                            return 'marked';
+                        }
+                    }
+                    return 'not_found';
+                })();
+                """
+                mark_result = sb.execute_script(mark_script)
+                
+                if mark_result == 'marked':
+                    time.sleep(1)
                     
-                    # 方式4: ActionChains 点击
-                    print("🖱️ 尝试方式4: ActionChains 点击")
-                    try:
-                        from selenium.webdriver.common.action_chains import ActionChains
-                        ActionChains(sb.driver).move_to_element(renew_btn).click().perform()
-                        print("✅ ActionChains 点击成功")
+                    # 获取标记按钮的坐标
+                    coords_script = """
+                    (function() {
+                        var btn = document.querySelector('button[data-renew-target="true"]');
+                        if (!btn) return null;
+                        var rect = btn.getBoundingClientRect();
+                        return {
+                            x: Math.round(rect.left + rect.width / 2),
+                            y: Math.round(rect.top + rect.height / 2)
+                        };
+                    })();
+                    """
+                    coords = sb.execute_script(coords_script)
+                    
+                    if coords:
+                        # 获取窗口偏移
+                        win_script = """
+                        (function() {
+                            return {
+                                sx: window.screenX || 0,
+                                sy: window.screenY || 0,
+                                oh: window.outerHeight || 0,
+                                ih: window.innerHeight || 0
+                            };
+                        })();
+                        """
+                        win_info = sb.execute_script(win_script)
+                        
+                        bar = win_info.get('oh', 0) - win_info.get('ih', 0)
+                        if bar < 0 or bar > 200:
+                            bar = 80
+                        
+                        screen_x = coords['x'] + win_info.get('sx', 0)
+                        screen_y = coords['y'] + win_info.get('sy', 0) + bar
+                        
+                        print(f"   准备点击坐标: ({screen_x}, {screen_y})")
+                        _xdotool_click(screen_x, screen_y)
+                        print("✅ xdotool 物理点击成功")
                         click_success = True
                         time.sleep(5)
-                    except Exception as e4:
-                        print(f"⚠️ ActionChains 点击失败: {e4}")
                         
-                        # 方式5: xdotool 物理点击（修复版）
-                        print("🖱️ 尝试方式5: xdotool 物理点击")
-                        try:
-                            # 激活窗口
-                            _activate_window()
-                            
-                            # 获取元素坐标（修复后的代码）
-                            coords = sb.execute_script("""
-                                (function() {
-                                    var el = arguments[0];
-                                    var rect = el.getBoundingClientRect();
-                                    return {
-                                        x: Math.round(rect.left + rect.width / 2),
-                                        y: Math.round(rect.top + rect.height / 2)
-                                    };
-                                })();
-                            """, renew_btn)
-                            
-                            if not coords or 'x' not in coords or 'y' not in coords:
-                                raise Exception("JavaScript 返回坐标为空或无效")
-                            
-                            # 获取窗口偏移（修复后的代码）
-                            win_info = sb.execute_script("""
-                                (function() {
-                                    return {
-                                        sx: window.screenX || 0,
-                                        sy: window.screenY || 0,
-                                        oh: window.outerHeight || 0,
-                                        ih: window.innerHeight || 0
-                                    };
-                                })();
-                            """)
-                            
-                            # 计算标题栏高度
-                            bar = win_info.get('oh', 0) - win_info.get('ih', 0)
-                            if bar < 0 or bar > 200:  # 异常值检测
-                                bar = 80  # 使用默认值
-                            
-                            screen_x = coords['x'] + win_info.get('sx', 0)
-                            screen_y = coords['y'] + win_info.get('sy', 0) + bar
-                            
-                            print(f"   元素坐标: x={coords['x']}, y={coords['y']}")
-                            print(f"   窗口偏移: sx={win_info.get('sx', 0)}, sy={win_info.get('sy', 0)}, 标题栏={bar}")
-                            print(f"   准备点击: ({screen_x}, {screen_y})")
-                            
-                            _xdotool_click(screen_x, screen_y)
-                            print("✅ xdotool 物理点击成功")
-                            click_success = True
-                            time.sleep(5)
-                        except Exception as e5:
-                            print(f"⚠️ xdotool 点击失败: {e5}")
+            except Exception as e5:
+                print(f"⚠️ xdotool 方式失败: {e5}")
 
         if not click_success:
             result["status"] = "error"
@@ -512,6 +548,8 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
             return result
 
         # ---------- 检查续期结果 ----------
+        time.sleep(3)
+        
         try:
             success_elem = sb.find_element("div.alert-success, div.alert-info", timeout=5)
             if success_elem:
