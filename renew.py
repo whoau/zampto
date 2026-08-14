@@ -330,7 +330,7 @@ def get_server_ids(sb) -> list:
     return []
 
 # ============================================================
-# 续期单个服务器（基于您提供的 HTML 结构精准定位）
+# 续期单个服务器（修正点击方式）
 # ============================================================
 
 def renew_one_server_by_id(sb, server_id, index) -> dict:
@@ -434,24 +434,26 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
             result["detail"] = "未找到 Renew Server 按钮"
             return result
 
-        # ---------- 点击按钮 ----------
+        # ---------- 点击按钮（修正方案） ----------
         try:
-            sb.scroll_to(renew_btn)
-            time.sleep(0.5)
-            try:
-                renew_btn.click()
-            except:
-                sb.execute_script("arguments[0].click();", renew_btn)
-            print("✅ 已点击 Renew Server 按钮")
+            # 使用 js_click 避免滚动问题
+            sb.js_click(renew_btn)
+            print("✅ 已通过 js_click 点击 Renew Server 按钮")
             time.sleep(5)
         except Exception as e:
-            result["status"] = "error"
-            result["detail"] = f"点击按钮失败: {e}"
-            print(f"❌ {result['detail']}")
-            return result
+            # 如果 js_click 失败，尝试普通点击
+            try:
+                sb.click(renew_btn)
+                print("✅ 已通过 sb.click 点击 Renew Server 按钮")
+                time.sleep(5)
+            except Exception as e2:
+                result["status"] = "error"
+                result["detail"] = f"点击按钮失败: {e2}"
+                print(f"❌ {result['detail']}")
+                return result
 
         # ---------- 检查续期结果 ----------
-        # 检查是否有成功提示（可能是 div.alert-success 或类似）
+        # 检查是否有成功提示
         try:
             success_elem = sb.find_element("div.alert-success, div.alert-info", timeout=5)
             if success_elem:
