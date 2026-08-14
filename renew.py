@@ -276,7 +276,7 @@ def login(sb) -> bool:
     return False
 
 # ============================================================
-# 获取服务器 ID 列表（从列表页提取）
+# 获取服务器 ID 列表
 # ============================================================
 
 def get_server_ids(sb) -> list:
@@ -285,7 +285,6 @@ def get_server_ids(sb) -> list:
 
     server_ids = []
 
-    # 方法1：正则从页面源码提取
     try:
         page_text = sb.get_page_source()
         pattern = r'ID:\s*(\d+)'
@@ -297,7 +296,6 @@ def get_server_ids(sb) -> list:
     except Exception as e:
         print(f"⚠️ 正则提取失败: {e}")
 
-    # 方法2：遍历元素查找 "ID:"
     try:
         all_elements = sb.find_elements("*")
         for elem in all_elements:
@@ -315,7 +313,6 @@ def get_server_ids(sb) -> list:
     except Exception as e:
         print(f"⚠️ 遍历提取失败: {e}")
 
-    # 方法3：从当前 URL 提取
     current_url = sb.get_current_url()
     if "id=" in current_url:
         import urllib.parse
@@ -330,7 +327,7 @@ def get_server_ids(sb) -> list:
     return []
 
 # ============================================================
-# 续期单个服务器（修正点击方式）
+# 续期单个服务器（使用 xdotool 物理点击）
 # ============================================================
 
 def renew_one_server_by_id(sb, server_id, index) -> dict:
@@ -349,7 +346,6 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
 
         sb.get(detail_url)
 
-        # 等待页面关键文字出现，确保内容加载完成
         print("⏳ 等待页面关键内容加载...")
         try:
             sb.wait_for_text("Server last renewed", timeout=15)
@@ -372,10 +368,10 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
 
         print(f"📄 当前页面: {current_url}")
 
-        # ---------- 基于 HTML 结构精准定位 "Renew Server" 按钮 ----------
+        # ---------- 定位 "Renew Server" 按钮 ----------
         renew_btn = None
 
-        # 首选 XPath：找到包含 "Server last renewed" 的卡片，再找按钮
+        # XPath 定位
         try:
             renew_btn = sb.find_element(
                 "//div[contains(@data-slot,'card')][.//*[contains(text(),'Server last renewed')]]"
@@ -386,7 +382,6 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
         except Exception:
             pass
 
-        # 备选1：通过标题 "Renew" 所在的卡片找按钮
         if renew_btn is None:
             try:
                 renew_btn = sb.find_element(
@@ -398,7 +393,6 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
             except Exception:
                 pass
 
-        # 备选2：直接找按钮文本（兼容性）
         if renew_btn is None:
             try:
                 renew_btn = sb.find_element("//button[normalize-space()='Renew Server']", timeout=3)
@@ -406,7 +400,6 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
             except Exception:
                 pass
 
-        # 备选3：遍历所有 button/a
         if renew_btn is None:
             print("⚠️ 未通过 XPath 定位，尝试遍历所有 button/a...")
             try:
@@ -421,7 +414,6 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
 
         if renew_btn is None:
             print("❌ 所有定位策略均失败")
-            # 保存截图并打印调试信息
             try:
                 all_btns = sb.find_elements("button")
                 print("页面上所有 button 的文本（前20个）:")
@@ -434,26 +426,35 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
             result["detail"] = "未找到 Renew Server 按钮"
             return result
 
-        # ---------- 点击按钮（修正方案） ----------
+        # ---------- 使用 xdotool 物理点击 ----------
         try:
-            # 使用 js_click 避免滚动问题
-            sb.js_click(renew_btn)
-            print("✅ 已通过 js_click 点击 Renew Server 按钮")
+            # 激活窗口
+            _activate_window()
+            # 获取元素坐标
+            location = renew_btn.location
+            size = renew_btn.size
+            x = location['x'] + size['width'] // 2
+            y = location['y'] + size['height'] // 2
+            # 获取窗口偏移（考虑标题栏）
+            try:
+                win_info = sb.execute_script("return {sx: window.screenX || 0, sy: window.screenY || 0, oh: window.outerHeight, ih: window.innerHeight};")
+                bar = win_info['oh'] - win_info['ih']
+                screen_x = x + win_info['sx']
+                screen_y = y + win_info['sy'] + bar
+            except:
+                screen_x = x
+                screen_y = y
+            print(f"🖱️ 准备点击坐标: ({screen_x}, {screen_y})")
+            _xdotool_click(screen_x, screen_y)
+            print("✅ 已通过 xdotool 物理点击 Renew Server 按钮")
             time.sleep(5)
         except Exception as e:
-            # 如果 js_click 失败，尝试普通点击
-            try:
-                sb.click(renew_btn)
-                print("✅ 已通过 sb.click 点击 Renew Server 按钮")
-                time.sleep(5)
-            except Exception as e2:
-                result["status"] = "error"
-                result["detail"] = f"点击按钮失败: {e2}"
-                print(f"❌ {result['detail']}")
-                return result
+            result["status"] = "error"
+            result["detail"] = f"物理点击失败: {e}"
+            print(f"❌ {result['detail']}")
+            return result
 
         # ---------- 检查续期结果 ----------
-        # 检查是否有成功提示
         try:
             success_elem = sb.find_element("div.alert-success, div.alert-info", timeout=5)
             if success_elem:
@@ -465,7 +466,6 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
         except Exception:
             pass
 
-        # 检查普通 alert
         alert_text = read_alert(sb)
         if alert_text:
             print(f"📩 页面提示: {alert_text}")
@@ -491,7 +491,7 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
         return result
 
 # ============================================================
-# 主续期流程：遍历所有服务器 ID
+# 主续期流程
 # ============================================================
 
 def renew_all_servers_by_id(sb) -> list:
@@ -513,7 +513,6 @@ def renew_all_servers_by_id(sb) -> list:
         results.append(result)
         print(f"📊 第 {idx+1} 个服务器 (ID={server_id}) 续期结果: {result['status']} - {result['detail']}")
 
-    # 汇总通知
     total = len(results)
     success = sum(1 for r in results if r['status'] == 'success')
     skipped = sum(1 for r in results if r['status'] == 'skipped')
