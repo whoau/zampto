@@ -63,7 +63,7 @@ def send_tg_message(status_icon: str, status_text: str, detail: str = ""):
         print(f"⚠️ Telegram 通知发送异常: {e}")
 
 # ============================================================
-# Cloudflare Turnstile 绕过
+# Cloudflare Turnstile 绕过（增加超时控制）
 # ============================================================
 
 _EXPAND_JS = """
@@ -132,14 +132,27 @@ def _xdotool_click(x: int, y: int):
     except Exception:
         os.system(f"xdotool mousemove {x} {y} click 1 2>/dev/null")
 
-def handle_turnstile(sb) -> bool:
-    print("🔍 处理 Cloudflare Turnstile 验证...")
+def handle_turnstile(sb, max_attempts=3, timeout_per_attempt=20) -> bool:
+    """
+    处理 Turnstile 验证，增加超时控制
+    
+    Args:
+        sb: SeleniumBase 实例
+        max_attempts: 最大尝试次数（默认 3 次）
+        timeout_per_attempt: 每次尝试的超时时间（秒，默认 20）
+    
+    Returns:
+        bool: 验证是否成功
+    """
+    print(f"🔍 处理 Cloudflare Turnstile 验证（最多 {max_attempts} 次，每次 {timeout_per_attempt} 秒超时）...")
     time.sleep(2)
 
+    # 检查是否已经通过
     if sb.execute_script(_SOLVED_JS):
         print("✅ 已静默通过")
         return True
 
+    # 扩展验证码显示区域
     for _ in range(3):
         try:
             sb.execute_script(_EXPAND_JS)
@@ -147,26 +160,42 @@ def handle_turnstile(sb) -> bool:
             pass
         time.sleep(0.5)
 
-    for attempt in range(6):
+    # 开始尝试
+    for attempt in range(max_attempts):
+        attempt_start = time.time()
+        
         if sb.execute_script(_SOLVED_JS):
-            print(f"✅ Turnstile 通过（第 {attempt + 1} 次尝试）")
+            print(f"✅ Turnstile 通过（第 {attempt + 1} 次尝试前已完成）")
             return True
 
-        print(f"🖱️ 第 {attempt + 1} 次调用 uc_gui_click_captcha...")
+        print(f"🖱️ 第 {attempt + 1}/{max_attempts} 次调用 uc_gui_click_captcha...")
         try:
             sb.uc_gui_click_captcha()
         except Exception as e:
             print(f"⚠️ uc_gui_click_captcha 调用异常: {e}")
 
-        for _ in range(16):
+        # 等待验证结果（带超时）
+        wait_count = 0
+        max_wait = timeout_per_attempt * 2  # 最多等待次数
+        
+        while wait_count < max_wait:
             time.sleep(0.5)
+            wait_count += 1
+            
+            # 检查是否通过
             if sb.execute_script(_SOLVED_JS):
-                print(f"✅ Turnstile 通过（第 {attempt + 1} 次尝试）")
+                elapsed = time.time() - attempt_start
+                print(f"✅ Turnstile 通过（第 {attempt + 1} 次尝试，耗时 {elapsed:.1f} 秒）")
                 return True
+            
+            # 超时检查
+            if time.time() - attempt_start > timeout_per_attempt:
+                print(f"⏱️ 第 {attempt + 1} 次尝试超时（{timeout_per_attempt} 秒），跳过...")
+                break
 
-        print(f"⚠️ 第 {attempt + 1} 次未通过，重试...")
+        print(f"⚠️ 第 {attempt + 1} 次未通过")
 
-    print("  ❌ Turnstile 6 次均失败")
+    print(f"❌ Turnstile {max_attempts} 次均失败或超时")
     return False
 
 # ============================================================
@@ -205,39 +234,32 @@ def extract_remaining_minutes(sb):
         
         # 方法1: 匹配 <span class="font-medium text-foreground">1d 23h 57m</span>
         span_match = re.search(
-            r'Expiry\s*\(Next Renewal\).*?<span[^>]*>(\d+d\s*)?(\d+h\s*)?(\d+m\s*)?</span>',
+            r'Expiry\s*\(Next Renewal\).*?<span[^>]*>((?:\d+d\s*)?(?:\d+h\s*)?(?:\d+m\s*)?)</span>',
             page_text,
             re.IGNORECASE | re.DOTALL
         )
         
         if span_match:
-            days = int(re.search(r'(\d+)d', span_match.group(1)).group(1)) if span_match.group(1) else 0
-            hours = int(re.search(r'(\d+)h', span_match.group(2)).group(1)) if span_match.group(2) else 0
-            minutes = int(re.search(r'(\d+)m', span_match.group(3)).group(1)) if span_match.group(3) else 0
+            time_str = span_match.group(1).strip()
+            days = hours = minutes = 0
+            
+            d_match = re.search(r'(\d+)d', time_str)
+            h_match = re.search(r'(\d+)h', time_str)
+            m_match = re.search(r'(\d+)m', time_str)
+            
+            if d_match:
+                days = int(d_match.group(1))
+            if h_match:
+                hours = int(h_match.group(1))
+            if m_match:
+                minutes = int(m_match.group(1))
             
             total_minutes = days * 24 * 60 + hours * 60 + minutes
             if total_minutes > 0:
                 print(f"✅ 成功提取时间（方法1-span标签）: {total_minutes} 分钟")
                 return total_minutes
         
-        # 方法2: 直接匹配纯文本 "1d 23h 58m"
-        text_match = re.search(
-            r'Expiry\s*\(Next Renewal\)[:\s]*(\d+d\s*)?(\d+h\s*)?(\d+m\s*)?',
-            page_text,
-            re.IGNORECASE
-        )
-        
-        if text_match:
-            days = int(re.search(r'(\d+)d', text_match.group(1)).group(1)) if text_match.group(1) else 0
-            hours = int(re.search(r'(\d+)h', text_match.group(2)).group(1)) if text_match.group(2) else 0
-            minutes = int(re.search(r'(\d+)m', text_match.group(3)).group(1)) if text_match.group(3) else 0
-            
-            total_minutes = days * 24 * 60 + hours * 60 + minutes
-            if total_minutes > 0:
-                print(f"✅ 成功提取时间（方法2-纯文本）: {total_minutes} 分钟")
-                return total_minutes
-        
-        # 方法3: 使用 JavaScript 直接从 DOM 提取
+        # 方法2: 使用 JavaScript 直接从 DOM 提取
         try:
             js_extract = """
             (function() {
@@ -249,7 +271,6 @@ def extract_remaining_minutes(sb):
                     }
                 }
                 
-                // 检查是否过期
                 var expiredSpans = document.querySelectorAll('span.text-red-400, span.font-medium.text-red-400');
                 for (var i = 0; i < expiredSpans.length; i++) {
                     if (expiredSpans[i].textContent.trim().toLowerCase() === 'expired') {
@@ -281,7 +302,7 @@ def extract_remaining_minutes(sb):
                 
                 total_minutes = days * 24 * 60 + hours * 60 + minutes
                 if total_minutes > 0:
-                    print(f"✅ 成功提取时间（方法3-JavaScript）: {total_minutes} 分钟")
+                    print(f"✅ 成功提取时间（方法2-JavaScript）: {total_minutes} 分钟")
                     return total_minutes
         except Exception as e:
             print(f"⚠️ JavaScript 提取失败: {e}")
@@ -340,10 +361,10 @@ def login(sb) -> bool:
     sb.update_text(PASSWORD_SELECTOR, PASSWORD)
     time.sleep(1)
 
-    # 处理 Turnstile（如果有）
+    # 处理 Turnstile（如果有）- 使用新的超时机制
     if sb.execute_script(_EXISTS_JS):
         print("🛡️ 检测到 Turnstile 验证，开始处理...")
-        if not handle_turnstile(sb):
+        if not handle_turnstile(sb, max_attempts=3, timeout_per_attempt=20):
             print("❌ Turnstile 验证失败")
             sb.save_screenshot("login_turnstile_fail.png")
             return False
@@ -437,7 +458,7 @@ def get_server_ids(sb) -> list:
     return []
 
 # ============================================================
-# 续期单个服务器（最终修复版 - 点击前提取时间）
+# 续期单个服务器（最终优化版）
 # ============================================================
 
 def renew_one_server_by_id(sb, server_id, index) -> dict:
@@ -478,7 +499,7 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
 
         print(f"📄 当前页面: {current_url}")
 
-        # ---------- 1. 【关键】点击前提取原始剩余时间 ----------
+        # ---------- 1. 点击前提取原始剩余时间 ----------
         old_minutes = extract_remaining_minutes(sb)
         if old_minutes is not None:
             if old_minutes == 0:
@@ -491,8 +512,8 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
         # ---------- 2. 点击续期按钮 ----------
         click_success = False
         
-        print("🖱️ 方式1: 通过 XPath 精确定位并 JavaScript 点击")
-        click_script_1 = """
+        print("🖱️ 尝试点击 Renew Server 按钮...")
+        click_script = """
         (function() {
             var xpath = "//div[@data-slot='card'][.//div[contains(text(),'Server last renewed')]]//button[normalize-space()='Renew Server']";
             var button = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
@@ -501,41 +522,26 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
                 button.click();
                 return 'success';
             }
+            
+            var buttons = document.querySelectorAll('button');
+            for (var i = 0; i < buttons.length; i++) {
+                if (buttons[i].textContent.trim() === 'Renew Server') {
+                    buttons[i].scrollIntoView({behavior: 'smooth', block: 'center'});
+                    buttons[i].click();
+                    return 'success';
+                }
+            }
             return 'not_found';
         })();
         """
         try:
             time.sleep(1)
-            result_msg = sb.execute_script(click_script_1)
+            result_msg = sb.execute_script(click_script)
             if result_msg == 'success':
-                print("✅ XPath 定位并点击成功")
+                print("✅ 点击成功")
                 click_success = True
-        except Exception as e1:
-            print(f"⚠️ XPath 方式失败: {e1}")
-
-        if not click_success:
-            print("🖱️ 方式2: 通过按钮文本查找并 JavaScript 点击")
-            click_script_2 = """
-            (function() {
-                var buttons = document.querySelectorAll('button');
-                for (var i = 0; i < buttons.length; i++) {
-                    if (buttons[i].textContent.trim() === 'Renew Server') {
-                        buttons[i].scrollIntoView({behavior: 'smooth', block: 'center'});
-                        buttons[i].click();
-                        return 'success';
-                    }
-                }
-                return 'not_found';
-            })();
-            """
-            try:
-                time.sleep(1)
-                result_msg = sb.execute_script(click_script_2)
-                if result_msg == 'success':
-                    print("✅ 按钮文本定位并点击成功")
-                    click_success = True
-            except Exception as e2:
-                print(f"⚠️ 按钮文本方式失败: {e2}")
+        except Exception as e:
+            print(f"⚠️ 点击失败: {e}")
 
         if not click_success:
             result["status"] = "error"
@@ -544,109 +550,99 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
             sb.save_screenshot(f"click_failed_{server_id}.png")
             return result
 
-        # ---------- 3. 点击后等待并尝试处理 Turnstile（但不强制成功） ----------
-        print("⏳ 等待页面响应...")
-        time.sleep(8)  # 增加等待时间，让续期操作完成
+        # ---------- 3. 等待并提前检查时间（关键优化） ----------
+        print("⏳ 等待 5 秒后检查时间变化...")
+        time.sleep(5)
         
-        print("🛡️ 检查是否出现 Turnstile 验证...")
-        turnstile_handled = False
-        for check_attempt in range(3):
-            time.sleep(1)
+        # 使用标志而不是直接 return
+        early_success = False
+        
+        quick_check_minutes = extract_remaining_minutes(sb)
+        if old_minutes is not None and quick_check_minutes is not None:
+            time_change = quick_check_minutes - old_minutes
+            
+            if time_change > 1000:  # 时间已显著增加
+                result["status"] = "success"
+                result["detail"] = f"✅ 续期成功！时间从 {old_minutes//1440}d{(old_minutes%1440)//60}h 增加到 {quick_check_minutes//1440}d{(quick_check_minutes%1440)//60}h"
+                print(f"✅ 提前确认续期成功（增加 {time_change} 分钟），跳过 Turnstile 处理")
+                early_success = True
+            elif old_minutes == 0 and quick_check_minutes > 0:
+                result["status"] = "success"
+                result["detail"] = f"✅ 从过期恢复！新时间: {quick_check_minutes//1440}d{(quick_check_minutes%1440)//60}h"
+                print(f"✅ 提前确认从过期恢复，跳过 Turnstile 处理")
+                early_success = True
+
+        # ---------- 4. 只有在未提前确认成功时才处理 Turnstile ----------
+        if not early_success:
+            print("🛡️ 检查是否需要 Turnstile 验证...")
             if sb.execute_script(_EXISTS_JS):
-                print(f"🔍 检测到 Turnstile（第 {check_attempt + 1} 次检查），尝试处理...")
-                if handle_turnstile(sb):
-                    print("✅ Turnstile 验证通过")
-                    turnstile_handled = True
-                    break
-                else:
-                    print("⚠️ Turnstile 验证失败，但继续检查续期结果...")
-                    # 不立即返回失败，继续检查时间变化
-                    break
-            
-            # 检查是否已经有成功提示
-            alert_text = read_alert(sb)
-            if alert_text and any(kw in alert_text.lower() for kw in ("renewed", "success", "extended")):
-                print("ℹ️ 检测到成功提示，无需 Turnstile")
-                turnstile_handled = True
-                break
-        else:
-            print("ℹ️ 未检测到 Turnstile，可能已自动通过")
-            turnstile_handled = True
+                print("🔍 检测到 Turnstile，开始处理（最多 60 秒）...")
+                
+                turnstile_success = handle_turnstile(sb, max_attempts=3, timeout_per_attempt=20)
+                
+                if not turnstile_success:
+                    print("⚠️ Turnstile 处理失败或超时，但继续检查续期结果...")
+            else:
+                print("ℹ️ 未检测到 Turnstile")
 
-        # ---------- 4. 重新加载详情页获取最新剩余时间 ----------
-        print("⏳ 重新加载详情页获取最新状态...")
-        time.sleep(3)
-        try:
-            sb.get(detail_url)
-            sb.wait_for_text("Server last renewed", timeout=15)
+            # ---------- 5. 重新加载详情页获取最终结果 ----------
+            print("⏳ 重新加载详情页获取最终状态...")
             time.sleep(3)
-        except Exception as e:
-            print(f"⚠️ 重新打开详情页失败: {e}")
+            try:
+                sb.get(detail_url)
+                sb.wait_for_text("Server last renewed", timeout=15)
+                time.sleep(3)
+            except Exception as e:
+                print(f"⚠️ 重新打开详情页失败: {e}")
 
-        new_minutes = extract_remaining_minutes(sb)
-        if new_minutes is not None:
-            if new_minutes == 0:
-                print(f"📅 新状态: 仍为过期（Expired）")
+            new_minutes = extract_remaining_minutes(sb)
+            if new_minutes is not None:
+                if new_minutes == 0:
+                    print(f"📅 最终状态: 仍为过期（Expired）")
+                else:
+                    print(f"📅 最终剩余时间: {new_minutes} 分钟 ({new_minutes//1440}d {(new_minutes%1440)//60}h {new_minutes%60}m)")
             else:
-                print(f"📅 新剩余时间: {new_minutes} 分钟 ({new_minutes//1440}d {(new_minutes%1440)//60}h {new_minutes%60}m)")
-        else:
-            print("⚠️ 未能提取新剩余时间")
+                print("⚠️ 未能提取最终剩余时间")
 
-        # ---------- 5. 读取提示 ----------
-        alert_text = read_alert(sb)
-        if alert_text:
-            print(f"📩 页面提示: {alert_text}")
+            alert_text = read_alert(sb)
+            if alert_text:
+                print(f"📩 页面提示: {alert_text}")
 
-        # ---------- 6. 【核心】基于时间变化判定（优先级最高） ----------
-        if old_minutes is not None and new_minutes is not None:
-            time_change = new_minutes - old_minutes
-            
-            # 场景1: 时间显著增加（通常续期会增加 28-30 天）
-            if time_change > 1000:  # 增加超过 16 小时（1000分钟）
-                result["status"] = "success"
-                result["detail"] = f"✅ 续期成功！时间从 {old_minutes//1440}d{(old_minutes%1440)//60}h 增加到 {new_minutes//1440}d{(new_minutes%1440)//60}h"
-                print(f"✅ 续期成功：剩余时间增加 {time_change} 分钟")
-                sb.save_screenshot(f"renew_success_{server_id}.png")
-                return result
-            
-            # 场景2: 从过期恢复（0 -> 任意正数）
-            elif old_minutes == 0 and new_minutes > 0:
-                result["status"] = "success"
-                result["detail"] = f"✅ 从过期状态恢复！新剩余时间: {new_minutes//1440}d{(new_minutes%1440)//60}h"
-                print(f"✅ 续期成功：从过期恢复")
-                sb.save_screenshot(f"renew_success_{server_id}.png")
-                return result
-            
-            # 场景3: 时间未变化或减少（自然流逝）
-            elif -10 < time_change < 100:  # 允许 -10 到 +100 分钟的误差
-                result["status"] = "skipped"
-                result["detail"] = f"⏭️ 可能已续期或未到期（时间变化: {time_change} 分钟）"
-                print(f"⏭️ 跳过：时间变化不明显")
-            else:
-                result["status"] = "unknown"
-                result["detail"] = f"时间变化异常: {time_change} 分钟"
-                print(f"⚠️ 时间变化异常")
-        
-        # 如果时间提取失败，依赖提示判断
-        elif alert_text:
-            lowered = alert_text.lower()
-            if any(kw in lowered for kw in ("renewed", "success", "extended", "completed")):
+            # ---------- 6. 最终判定 ----------
+            if old_minutes is not None and new_minutes is not None:
+                time_change = new_minutes - old_minutes
+                
+                if time_change > 1000:
+                    result["status"] = "success"
+                    result["detail"] = f"✅ 续期成功！时间从 {old_minutes//1440}d{(old_minutes%1440)//60}h 增加到 {new_minutes//1440}d{(new_minutes%1440)//60}h"
+                    print(f"✅ 续期成功（增加 {time_change} 分钟）")
+                elif old_minutes == 0 and new_minutes > 0:
+                    result["status"] = "success"
+                    result["detail"] = f"✅ 从过期恢复！新时间: {new_minutes//1440}d{(new_minutes%1440)//60}h"
+                    print(f"✅ 从过期恢复")
+                elif -10 < time_change < 100:
+                    result["status"] = "skipped"
+                    result["detail"] = f"⏭️ 可能已续期（时间变化: {time_change} 分钟）"
+                    print(f"⏭️ 跳过（时间变化不明显）")
+                else:
+                    result["status"] = "unknown"
+                    result["detail"] = f"时间变化异常: {time_change} 分钟"
+                    print(f"⚠️ 未知状态（时间变化: {time_change} 分钟）")
+            elif alert_text and any(kw in alert_text.lower() for kw in ("renewed", "success", "extended")):
                 result["status"] = "success"
                 result["detail"] = alert_text
                 print("✅ 续期成功（根据提示判断）")
-            elif any(kw in lowered for kw in ("can't renew", "unable", "failed", "error")):
-                result["status"] = "failed"
-                result["detail"] = alert_text
-                print("❌ 续期失败（根据提示判断）")
             else:
                 result["status"] = "unknown"
-                result["detail"] = alert_text
+                result["detail"] = f"无法确认（原: {old_minutes}, 新: {new_minutes}）"
+                print("⚠️ 无法确认续期结果")
+        
+        # 保存截图
+        if early_success:
+            sb.save_screenshot(f"renew_success_early_{server_id}.png")
         else:
-            result["status"] = "unknown"
-            result["detail"] = f"无法确认（原: {old_minutes}, 新: {new_minutes}, Turnstile: {turnstile_handled}）"
-            print("⚠️ 无法确认续期结果")
-
-        sb.save_screenshot(f"renew_result_{server_id}.png")
+            sb.save_screenshot(f"renew_result_{server_id}.png")
+        
         return result
 
     except Exception as e:
@@ -696,8 +692,12 @@ def renew_all_servers_by_id(sb) -> list:
     detail = "\n".join(detail_lines)
 
     send_tg_message("📋", summary, detail)
+    print("\n" + "=" * 50)
     print(summary)
-    print("详细结果:\n" + detail)
+    print("=" * 50)
+    print("详细结果:")
+    print(detail)
+    print("=" * 50)
 
     return results
 
