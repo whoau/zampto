@@ -62,7 +62,7 @@ def send_tg_message(status_icon: str, status_text: str, detail: str = ""):
         print(f"⚠️ Telegram 通知发送异常: {e}")
 
 # ============================================================
-# Cloudflare Turnstile 绕过
+# Cloudflare Turnstile 绕过（保留无参 JS）
 # ============================================================
 
 _EXPAND_JS = """
@@ -135,6 +135,7 @@ def handle_turnstile(sb) -> bool:
     print("🔍 处理 Cloudflare Turnstile 验证...")
     time.sleep(2)
 
+    # 使用无参 JS，安全
     if sb.execute_script(_SOLVED_JS):
         print("✅ 已静默通过")
         return True
@@ -183,27 +184,8 @@ def read_alert(sb) -> str:
         pass
     return ""
 
-def js_fill_input(sb, selector: str, text: str):
-    safe_text = text.replace('\\', '\\\\').replace('"', '\\"')
-    sb.execute_script(f"""
-    (function(){{
-        var el = document.querySelector('{selector}');
-        if (!el) return;
-        var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-            window.HTMLInputElement.prototype, "value"
-        ).set;
-        if (nativeInputValueSetter) {{
-            nativeInputValueSetter.call(el, "{safe_text}");
-        }} else {{
-            el.value = "{safe_text}";
-        }}
-        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-    }})()
-    """)
-
 # ============================================================
-# 登录
+# 登录（改用 sb.update_text，移除所有带参 JS）
 # ============================================================
 
 def login(sb) -> bool:
@@ -244,9 +226,9 @@ def login(sb) -> bool:
         pass
 
     print(f"📧 填写邮箱 ({EMAIL_SELECTOR})……")
-    js_fill_input(sb, EMAIL_SELECTOR, EMAIL)
+    sb.update_text(EMAIL_SELECTOR, EMAIL)   # 原生方法，稳定
     print(f"🔑 填写密码 ({PASSWORD_SELECTOR})……")
-    js_fill_input(sb, PASSWORD_SELECTOR, PASSWORD)
+    sb.update_text(PASSWORD_SELECTOR, PASSWORD)
     time.sleep(1)
 
     # 处理 Turnstile（如果有）
@@ -295,7 +277,7 @@ def login(sb) -> bool:
     return False
 
 # ============================================================
-# 获取服务器 ID 列表（从列表页）
+# 获取服务器 ID 列表（纯文本提取，无 JS）
 # ============================================================
 
 def get_server_ids(sb) -> list:
@@ -311,7 +293,6 @@ def get_server_ids(sb) -> list:
     try:
         # 方法1：通过文本 "ID: 数字" 匹配
         page_text = sb.get_page_source()
-        # 使用正则匹配 ID: 后面的数字
         pattern = r'ID:\s*(\d+)'
         matches = re.findall(pattern, page_text)
         if matches:
@@ -327,7 +308,6 @@ def get_server_ids(sb) -> list:
         for elem in all_elements:
             text = (elem.text or "").strip()
             if "ID:" in text:
-                # 提取数字
                 parts = text.split("ID:")
                 if len(parts) > 1:
                     id_part = parts[1].strip().split()[0]
@@ -340,7 +320,7 @@ def get_server_ids(sb) -> list:
     except Exception as e:
         print(f"⚠️ 遍历提取 ID 失败: {e}")
 
-    # 方法3：如果没有找到，尝试从 URL 中提取（当前页面可能就是详情页）
+    # 方法3：从当前 URL 提取
     current_url = sb.get_current_url()
     if "id=" in current_url:
         import urllib.parse
@@ -355,7 +335,7 @@ def get_server_ids(sb) -> list:
     return []
 
 # ============================================================
-# 续期单个服务器（通过 URL 直接访问）
+# 续期单个服务器（通过 URL，使用原生滚动/点击）
 # ============================================================
 
 def renew_one_server_by_id(sb, server_id, index) -> dict:
@@ -375,11 +355,9 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
         print(f"\n🔄 正在处理第 {index+1} 个服务器: ID={server_id}")
         print(f"🌐 打开详情页: {detail_url}")
 
-        # 直接打开详情页
         sb.get(detail_url)
-        time.sleep(5)  # 等待页面加载
+        time.sleep(5)
 
-        # 检查页面是否加载成功
         current_url = sb.get_current_url()
         if "server" not in current_url.lower():
             result["status"] = "failed"
@@ -388,11 +366,6 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
             return result
 
         print(f"📄 当前页面: {current_url}")
-
-        # 检查续期状态：是否已过期或已续期
-        # 从截图中看到有 "Expiry (Next Renewal): Expired" 和 "Server last renewed: Aug 12, 2026"
-        # 这些信息可以帮助判断是否需要续期，但我们直接点击 Renew Server 按钮即可
-        # 如果已经续期，按钮可能不可用或会提示错误
 
         # 查找 "Renew Server" 按钮
         elements = sb.find_elements("button, a")
@@ -410,10 +383,10 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
             sb.save_screenshot(f"renew_button_fail_{server_id}.png")
             return result
 
-        # 点击 Renew Server（使用 JS）
-        sb.execute_script("arguments[0].scrollIntoView({block:'center'});", renew_btn)
+        # 使用原生方法滚动和点击
+        sb.scroll_to(renew_btn)
         time.sleep(0.5)
-        sb.execute_script("arguments[0].click();", renew_btn)
+        renew_btn.click()
         print("✅ 已点击 Renew Server 按钮")
         time.sleep(5)
 
@@ -430,7 +403,7 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
             else:
                 result["status"] = "unknown"
         else:
-            # 检查页面是否有成功提示（如绿色横幅）
+            # 检查是否有成功提示框
             try:
                 success_elem = sb.find_element("div.alert-success", timeout=3)
                 if success_elem:
@@ -454,7 +427,7 @@ def renew_one_server_by_id(sb, server_id, index) -> dict:
         return result
 
 # ============================================================
-# 主续期流程：通过 ID 遍历所有服务器
+# 主续期流程
 # ============================================================
 
 def renew_all_servers_by_id(sb) -> list:
@@ -462,7 +435,6 @@ def renew_all_servers_by_id(sb) -> list:
     print("   开始 ZamPTO 自动续期流程（通过服务器 ID）")
     print("#" * 25)
 
-    # 获取所有服务器 ID
     server_ids = get_server_ids(sb)
 
     if not server_ids:
@@ -471,14 +443,12 @@ def renew_all_servers_by_id(sb) -> list:
 
     print(f"📋 待续期服务器 ID 列表: {server_ids}")
 
-    # 逐个续期
     results = []
     for idx, server_id in enumerate(server_ids):
         result = renew_one_server_by_id(sb, server_id, idx)
         results.append(result)
         print(f"📊 第 {idx+1} 个服务器 (ID={server_id}) 续期结果: {result['status']} - {result['detail']}")
 
-    # 汇总通知
     total = len(results)
     success = sum(1 for r in results if r['status'] == 'success')
     skipped = sum(1 for r in results if r['status'] == 'skipped')
@@ -539,7 +509,6 @@ def main():
 
             if login(sb):
                 print("\n🎉 登录流程成功")
-                # 登录后，当前页面是仪表盘，开始续期
                 renew_all_servers_by_id(sb)
             else:
                 print("\n❌ 登录失败，终止续期操作。")
