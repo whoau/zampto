@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -28,6 +27,10 @@ PROXY_SERVER = os.environ.get(
 ).strip()
 
 BASE_URL = "https://dash.zampto.net"
+
+# 已从你的 DevTools 截图确认
+EMAIL_SELECTOR = "#email"
+PASSWORD_SELECTOR = "#password"
 
 
 # ============================================================
@@ -64,7 +67,6 @@ def send_tg_message(
             )
         else:
             masked_email = f"{name}@{domain}"
-
     else:
         masked_email = (
             EMAIL[:2] + "****"
@@ -125,44 +127,48 @@ def js_fill_input(
     """
 
     try:
-        return bool(
-            sb.execute_script(
-                """
-                const selector = arguments[0];
-                const value = arguments[1];
+        result = sb.execute_script(
+            """
+            const selector = arguments[0];
+            const value = arguments[1];
 
-                const el = document.querySelector(selector);
+            const el = document.querySelector(selector);
 
-                if (!el) {
-                    return false;
-                }
+            if (!el) {
+                return false;
+            }
 
-                const setter =
-                    Object.getOwnPropertyDescriptor(
-                        window.HTMLInputElement.prototype,
-                        "value"
-                    ).set;
-
-                setter.call(el, value);
-
-                el.dispatchEvent(
-                    new Event("input", {
-                        bubbles: true
-                    })
+            const descriptor =
+                Object.getOwnPropertyDescriptor(
+                    window.HTMLInputElement.prototype,
+                    "value"
                 );
 
-                el.dispatchEvent(
-                    new Event("change", {
-                        bubbles: true
-                    })
-                );
+            if (descriptor && descriptor.set) {
+                descriptor.set.call(el, value);
+            } else {
+                el.value = value;
+            }
 
-                return true;
-                """,
-                selector,
-                text,
-            )
+            el.dispatchEvent(
+                new Event("input", {
+                    bubbles: true
+                })
+            );
+
+            el.dispatchEvent(
+                new Event("change", {
+                    bubbles: true
+                })
+            );
+
+            return true;
+            """,
+            selector,
+            text,
         )
+
+        return bool(result)
 
     except Exception as exc:
         print(
@@ -309,120 +315,131 @@ def login(sb) -> bool:
     print("   开始 ZamPTO 登录")
     print("#" * 25)
 
-    login_urls = [
-        f"{BASE_URL}/auth/login",
-        f"{BASE_URL}/login",
-    ]
-
-    loaded = False
-
     # --------------------------------------------------------
-    # 打开登录页面
+    # 固定使用已经确认的登录地址
     # --------------------------------------------------------
 
-    for login_url in login_urls:
+    login_url = f"{BASE_URL}/auth/login"
 
+    print(
+        f"🌐 打开登录页面: {login_url}"
+    )
+
+    try:
+        sb.uc_open_with_reconnect(
+            login_url,
+            reconnect_time=8
+        )
+    except Exception as exc:
         print(
-            f"🌐 打开登录页面: {login_url}"
+            f"⚠️ 打开登录页面失败: {exc}"
+        )
+        return False
+
+    # --------------------------------------------------------
+    # 等待页面 / SPA 渲染
+    # --------------------------------------------------------
+
+    print(
+        "⏳ 等待登录表单加载……"
+    )
+
+    try:
+        sb.wait_for_element(
+            EMAIL_SELECTOR,
+            timeout=30
         )
 
+        sb.wait_for_element(
+            PASSWORD_SELECTOR,
+            timeout=30
+        )
+
+        print(
+            "✅ 登录表单加载成功"
+        )
+
+    except Exception as exc:
+
+        print(
+            f"❌ 登录表单未加载成功: {exc}"
+        )
+
+        print(
+            f"当前 URL: {sb.get_current_url()}"
+        )
+
+        print(
+            f"当前标题: {sb.get_title() or ''}"
+        )
+
+        # 调试：打印当前页面所有 input
         try:
 
-            sb.uc_open_with_reconnect(
-                login_url,
-                reconnect_time=8
-            )
-
-            time.sleep(5)
-
-            current_url = sb.get_current_url()
+            inputs = sb.find_elements("input")
 
             print(
-                f"📄 当前 URL: {current_url}"
+                f"🔎 当前页面检测到 "
+                f"{len(inputs)} 个 input"
             )
 
-            if sb.is_element_present(
-                'input[name="email"]'
-            ):
-                loaded = True
+            for index, element in enumerate(inputs):
 
-                print(
-                    "✅ 登录表单加载成功"
-                )
+                try:
+                    input_type = (
+                        element.get_attribute("type")
+                    )
 
-                break
+                    input_id = (
+                        element.get_attribute("id")
+                    )
 
-        except Exception as exc:
+                    input_name = (
+                        element.get_attribute("name")
+                    )
 
-            print(
-                f"⚠️ 页面打开失败: {exc}"
-            )
+                    placeholder = (
+                        element.get_attribute(
+                            "placeholder"
+                        )
+                    )
 
-    # --------------------------------------------------------
-    # 登录页面没有正常加载
-    # --------------------------------------------------------
+                    autocomplete = (
+                        element.get_attribute(
+                            "autocomplete"
+                        )
+                    )
 
-    if not loaded:
+                    print(
+                        f"   input[{index}] "
+                        f"type={input_type} "
+                        f"id={input_id} "
+                        f"name={input_name} "
+                        f"placeholder={placeholder} "
+                        f"autocomplete={autocomplete}"
+                    )
 
-        print(
-            "❌ 登录页面未加载成功"
-        )
-
-        print(
-            f"当前 URL: "
-            f"{sb.get_current_url()}"
-        )
-
-        print(
-            f"当前标题: "
-            f"{sb.get_title() or ''}"
-        )
-
-        # 再检查一次验证
-        if has_challenge(sb):
-
-            print(
-                "⚠️ 检测到人机验证"
-            )
-
-            if not wait_for_challenge_to_clear(
-                sb,
-                timeout=30
-            ):
-
-                sb.save_screenshot(
-                    "login_challenge.png"
-                )
-
-                return False
-
-        try:
-            sb.wait_for_element(
-                'input[name="email"]',
-                timeout=15
-            )
-
-            loaded = True
+                except Exception:
+                    pass
 
         except Exception:
+            pass
 
-            print(
-                "❌ 页面未加载出登录表单"
-            )
+        sb.save_screenshot(
+            "login_form_fail.png"
+        )
 
-            sb.save_screenshot(
-                "login_load_fail.png"
-            )
-
-            return False
+        return False
 
     # --------------------------------------------------------
-    # Cookie
+    # Cookie 同意
     # --------------------------------------------------------
 
     try:
 
-        for button in sb.find_elements("button"):
+        for button in sb.find_elements(
+            "button"
+        ):
 
             text = (
                 button.text or ""
@@ -441,7 +458,7 @@ def login(sb) -> bool:
 
                 button.click()
 
-                time.sleep(0.5)
+                time.sleep(1)
 
                 break
 
@@ -449,27 +466,22 @@ def login(sb) -> bool:
         pass
 
     # --------------------------------------------------------
-    # 填写邮箱
+    # 填写 Email
     # --------------------------------------------------------
 
-    print("📧 填写邮箱……")
-
-    if not EMAIL:
-
-        print(
-            "❌ ZAM_PTO_EMAIL 未配置"
-        )
-
-        return False
+    print(
+        f"📧 填写邮箱 "
+        f"({EMAIL_SELECTOR})……"
+    )
 
     if not js_fill_input(
         sb,
-        'input[name="email"]',
+        EMAIL_SELECTOR,
         EMAIL
     ):
 
         print(
-            "❌ 邮箱输入框不存在"
+            "❌ 邮箱填写失败"
         )
 
         sb.save_screenshot(
@@ -479,27 +491,22 @@ def login(sb) -> bool:
         return False
 
     # --------------------------------------------------------
-    # 填写密码
+    # 填写 Password
     # --------------------------------------------------------
 
-    print("🔑 填写密码……")
-
-    if not PASSWORD:
-
-        print(
-            "❌ ZAM_PTO_PASSWORD 未配置"
-        )
-
-        return False
+    print(
+        f"🔑 填写密码 "
+        f"({PASSWORD_SELECTOR})……"
+    )
 
     if not js_fill_input(
         sb,
-        'input[name="password"]',
+        PASSWORD_SELECTOR,
         PASSWORD
     ):
 
         print(
-            "❌ 密码输入框不存在"
+            "❌ 密码填写失败"
         )
 
         sb.save_screenshot(
@@ -511,13 +518,56 @@ def login(sb) -> bool:
     time.sleep(1)
 
     # --------------------------------------------------------
-    # Cloudflare 验证
+    # 再次确认输入框中确实有值
+    # --------------------------------------------------------
+
+    try:
+
+        email_value = sb.execute_script(
+            """
+            const el =
+                document.querySelector(arguments[0]);
+            return el ? el.value : "";
+            """,
+            EMAIL_SELECTOR
+        )
+
+        password_length = sb.execute_script(
+            """
+            const el =
+                document.querySelector(arguments[0]);
+            return el && el.value
+                ? el.value.length
+                : 0;
+            """,
+            PASSWORD_SELECTOR
+        )
+
+        print(
+            f"✅ Email 已填写，长度: "
+            f"{len(email_value or '')}"
+        )
+
+        print(
+            f"✅ Password 已填写，长度: "
+            f"{password_length}"
+        )
+
+    except Exception as exc:
+
+        print(
+            f"⚠️ 检查输入值失败: {exc}"
+        )
+
+    # --------------------------------------------------------
+    # Cloudflare
     # --------------------------------------------------------
 
     if has_challenge(sb):
 
         print(
-            "🛡️ 检测到人机验证"
+            "🛡️ 检测到人机验证，"
+            "等待正常完成……"
         )
 
         if not wait_for_challenge_to_clear(
@@ -538,14 +588,14 @@ def login(sb) -> bool:
         )
 
     # --------------------------------------------------------
-    # 点击 Login
+    # 查找 Login 按钮
     # --------------------------------------------------------
 
     print(
         "🖱️ 查找 Login 按钮……"
     )
 
-    clicked = False
+    login_button = None
 
     try:
 
@@ -553,51 +603,116 @@ def login(sb) -> bool:
             "button"
         )
 
-        for button in buttons:
+        print(
+            f"🔎 页面共有 "
+            f"{len(buttons)} 个 button"
+        )
 
-            text = (
-                button.text or ""
-            ).strip().lower()
+        for index, button in enumerate(
+            buttons
+        ):
 
-            print(
-                f"   🔘 按钮: {text}"
-            )
+            try:
 
-            if text == "login":
+                text = (
+                    button.text or ""
+                ).strip()
 
-                sb.execute_script(
-                    """
-                    arguments[0]
-                    .scrollIntoView({
-                        block: 'center'
-                    });
-                    """,
-                    button
+                button_type = (
+                    button.get_attribute(
+                        "type"
+                    )
                 )
-
-                time.sleep(0.5)
-
-                button.click()
-
-                clicked = True
 
                 print(
-                    "✅ 已点击 Login 按钮"
+                    f"   button[{index}] "
+                    f"text={text!r} "
+                    f"type={button_type!r}"
                 )
 
-                break
+                if text.lower() == "login":
+
+                    login_button = button
+
+                    print(
+                        "✅ 找到 Login 按钮"
+                    )
+
+                    break
+
+            except Exception:
+                continue
 
     except Exception as exc:
 
         print(
-            f"⚠️ 点击 Login 按钮失败: {exc}"
+            f"⚠️ 查找 Login 按钮失败: "
+            f"{exc}"
         )
 
     # --------------------------------------------------------
-    # 如果没找到 Login 按钮
+    # 没找到时，使用备用选择器
     # --------------------------------------------------------
 
-    if not clicked:
+    if login_button is None:
+
+        print(
+            "⚠️ 通过文字没有找到 Login，"
+            "尝试备用选择器……"
+        )
+
+        fallback_selectors = [
+            'button[type="submit"]',
+            'button',
+            'input[type="submit"]',
+        ]
+
+        for selector in fallback_selectors:
+
+            try:
+
+                elements = sb.find_elements(
+                    selector
+                )
+
+                for element in elements:
+
+                    text = (
+                        element.text or ""
+                    ).strip().lower()
+
+                    value = (
+                        element.get_attribute(
+                            "value"
+                        ) or ""
+                    ).strip().lower()
+
+                    if (
+                        text == "login"
+                        or value == "login"
+                        or selector == 'button[type="submit"]'
+                    ):
+
+                        login_button = element
+
+                        print(
+                            f"✅ 找到登录按钮: "
+                            f"{selector}"
+                        )
+
+                        break
+
+                if login_button is not None:
+                    break
+
+            except Exception:
+                continue
+
+    # --------------------------------------------------------
+    # 最终仍未找到
+    # --------------------------------------------------------
+
+    if login_button is None:
 
         print(
             "❌ 没找到 Login 按钮"
@@ -610,6 +725,64 @@ def login(sb) -> bool:
         return False
 
     # --------------------------------------------------------
+    # 点击 Login
+    # --------------------------------------------------------
+
+    print(
+        "🖱️ 点击 Login……"
+    )
+
+    try:
+
+        sb.execute_script(
+            """
+            arguments[0].scrollIntoView({
+                block: "center"
+            });
+            """,
+            login_button
+        )
+
+        time.sleep(0.5)
+
+        login_button.click()
+
+        print(
+            "✅ Login 按钮已点击"
+        )
+
+    except Exception as exc:
+
+        print(
+            f"⚠️ 普通点击失败: {exc}"
+        )
+
+        try:
+
+            sb.execute_script(
+                """
+                arguments[0].click();
+                """,
+                login_button
+            )
+
+            print(
+                "✅ 已使用 JS 点击 Login"
+            )
+
+        except Exception as exc2:
+
+            print(
+                f"❌ JS 点击也失败: {exc2}"
+            )
+
+            sb.save_screenshot(
+                "login_click_fail.png"
+            )
+
+            return False
+
+    # --------------------------------------------------------
     # 等待登录结果
     # --------------------------------------------------------
 
@@ -617,40 +790,44 @@ def login(sb) -> bool:
         "⏳ 等待登录结果……"
     )
 
-    login_page_urls = {
-        f"{BASE_URL}/auth/login",
-        f"{BASE_URL}/auth/login/",
-        f"{BASE_URL}/login",
-        f"{BASE_URL}/login/",
+    login_paths = {
+        "/auth/login",
+        "/login",
     }
 
     for i in range(30):
 
         time.sleep(1)
 
-        current_url = (
-            sb.get_current_url()
-        )
+        current_url = sb.get_current_url()
 
-        page_title = (
-            sb.get_title() or ""
-        )
-
-        normalized_url = (
+        normalized_path = (
             current_url
             .split("?", 1)[0]
             .rstrip("/")
             .lower()
         )
 
+        # 提取 path
+        if "://" in normalized_path:
+            try:
+                from urllib.parse import urlparse
+
+                normalized_path = (
+                    urlparse(
+                        normalized_path
+                    ).path.rstrip("/").lower()
+                )
+            except Exception:
+                pass
+
         print(
             f"   [{i + 1}/30] "
-            f"URL: {current_url} | "
-            f"Title: {page_title}"
+            f"URL: {current_url}"
         )
 
         # ----------------------------------------------------
-        # 检查页面错误
+        # 检测明显错误
         # ----------------------------------------------------
 
         alert_text = read_alert(sb)
@@ -677,7 +854,7 @@ def login(sb) -> bool:
             ):
 
                 print(
-                    "❌ 检测到登录失败提示"
+                    "❌ 检测到账号/密码错误"
                 )
 
                 sb.save_screenshot(
@@ -687,15 +864,10 @@ def login(sb) -> bool:
                 return False
 
         # ----------------------------------------------------
-        # 判断是否已经离开登录页
-        #
-        # 不再要求必须出现 dashboard
+        # URL 已经离开登录页
         # ----------------------------------------------------
 
-        if normalized_url not in {
-            url.rstrip("/").lower()
-            for url in login_page_urls
-        }:
+        if normalized_path not in login_paths:
 
             print(
                 "✅ 登录成功！"
@@ -707,18 +879,53 @@ def login(sb) -> bool:
             )
 
             print(
-                f"📄 登录后 Title: "
-                f"{page_title}"
+                f"📄 登录后标题: "
+                f"{sb.get_title() or ''}"
             )
 
             return True
 
+        # ----------------------------------------------------
+        # 检查登录表单是否消失
+        # ----------------------------------------------------
+
+        try:
+
+            email_exists = (
+                sb.is_element_present(
+                    EMAIL_SELECTOR
+                )
+            )
+
+            password_exists = (
+                sb.is_element_present(
+                    PASSWORD_SELECTOR
+                )
+            )
+
+            if not email_exists and not password_exists:
+
+                print(
+                    "✅ 登录表单已消失，"
+                    "判断登录成功"
+                )
+
+                print(
+                    f"📄 当前 URL: "
+                    f"{current_url}"
+                )
+
+                return True
+
+        except Exception:
+            pass
+
     # --------------------------------------------------------
-    # 超时
+    # 登录超时
     # --------------------------------------------------------
 
     print(
-        "❌ 登录失败，"
+        "❌ 登录超时，"
         "30 秒内没有离开登录页面。"
     )
 
@@ -733,7 +940,7 @@ def login(sb) -> bool:
     )
 
     sb.save_screenshot(
-        "login_failed.png"
+        "login_timeout.png"
     )
 
     return False
@@ -811,7 +1018,7 @@ def goto_server_detail(sb) -> bool:
                         """
                         arguments[0]
                         .scrollIntoView({
-                            block: 'center'
+                            block: "center"
                         });
                         """,
                         element
@@ -834,7 +1041,7 @@ def goto_server_detail(sb) -> bool:
             continue
 
     # --------------------------------------------------------
-    # 备用：遍历所有 a / button
+    # 备用
     # --------------------------------------------------------
 
     try:
@@ -908,7 +1115,7 @@ def open_renew_dialog(sb) -> bool:
                     """
                     arguments[0]
                     .scrollIntoView({
-                        block: 'center'
+                        block: "center"
                     });
                     """,
                     element
@@ -1152,7 +1359,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # 检查账号环境变量
+    # 环境变量检查
     # --------------------------------------------------------
 
     if not EMAIL or not PASSWORD:
@@ -1273,16 +1480,8 @@ def main():
 
                 raise SystemExit(1)
 
-    # --------------------------------------------------------
-    # SystemExit
-    # --------------------------------------------------------
-
     except SystemExit:
         raise
-
-    # --------------------------------------------------------
-    # 其他异常
-    # --------------------------------------------------------
 
     except Exception as exc:
 
@@ -1306,4 +1505,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
